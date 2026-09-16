@@ -1764,14 +1764,36 @@ const Chat: React.FC = () => {
         try {
             let promptMessages = messages;
             const trimmedNote = note.trim();
-            if (characterPhotoFromChat && characterPhotoInitialNote.trim()) {
+            const shouldReplyWithText = characterPhotoFromChat && !!characterPhotoInitialNote.trim();
+            if (shouldReplyWithText) {
                 const requestText = characterPhotoInitialNote.trim();
                 await DB.saveMessage({ charId: char.id, role: 'user', type: 'text', content: requestText });
                 promptMessages = await DB.getRecentMessagesByCharId(char.id, 200);
-                setCharacterPhotoFromChat(false);
                 setInput('');
                 localStorage.removeItem(draftKey);
             }
+
+            // 确认后马上回到聊天页：文字回复与照片在后台并行生成。此前弹窗会一直挡到
+            // 图片完成，而且自然语言入口只产出图片、不触发角色正常回复，看起来像角色
+            // “不会说话，只甩来一张图”。加号面板主动生图仍只生成照片；只有聊天里明确
+            // 说“拍给我看 / 发张自拍”等，才同时触发本轮文字回复。
+            setCharacterPhotoOpen(false);
+            setCharacterPhotoInitialNote('');
+            setCharacterPhotoFromChat(false);
+
+            if (shouldReplyWithText) {
+                await reloadMessages(visibleCountRef.current);
+                addToast(`${char.name} 正在回复，也在准备照片…`, 'info');
+                if (!isTyping) {
+                    if (isInstantConfigReady()) {
+                        setInstantSendingActive(true);
+                        void triggerAI(promptMessages, undefined, () => setInstantSendingActive(false));
+                    } else {
+                        void triggerAI(promptMessages);
+                    }
+                }
+            }
+
             const prompt = await buildCharacterPhotoPrompt({
                 char,
                 user: userProfile,
@@ -1814,9 +1836,6 @@ const Chat: React.FC = () => {
             }
             markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
             await reloadMessages(visibleCountRef.current);
-            setCharacterPhotoOpen(false);
-            setCharacterPhotoInitialNote('');
-            setCharacterPhotoFromChat(false);
             addToast(generated.length > 1 ? `${char.name} 发来了 ${generated.length} 张照片` : `${char.name} 发来了一张照片`, 'success');
         } catch (error: any) {
             console.error('[Chat] character photo generation failed', error);
