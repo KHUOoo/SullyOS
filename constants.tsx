@@ -14,7 +14,7 @@ import {
   SealCheck,
   House,
   DeviceMobileCamera,
-  Fire,
+  Aperture,
   Books,
   Question,
   GameController,
@@ -53,7 +53,7 @@ export const Icons: Record<string, React.FC<{ className?: string }>> = {
   Schedule: ({ className }) => <SealCheck className={className} weight="regular" />,
   Room: ({ className }) => <House className={className} weight="regular" />,
   CheckPhone: ({ className }) => <DeviceMobileCamera className={className} weight="regular" />,
-  Social: ({ className }) => <Fire className={className} weight="regular" />,
+  Social: ({ className }) => <Aperture className={className} weight="regular" />,
   Study: ({ className }) => <Books className={className} weight="regular" />,
   FAQ: ({ className }) => <Question className={className} weight="regular" />,
   Game: ({ className }) => <GameController className={className} weight="regular" />,
@@ -94,7 +94,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Bank, name: '存钱罐', icon: 'Bank', color: 'lime' }, // Hidden
   { id: AppID.Journal, name: '交换日记', icon: 'Journal', color: 'amber' },
   // { id: AppID.Handbook, name: '手账', icon: 'Handbook', color: 'fuchsia' }, // Hidden temporarily, pending update
-  { id: AppID.Social, name: 'Spark', icon: 'Social', color: 'red' },
+  { id: AppID.Social, name: '朋友圈', icon: 'Social', color: 'green' },
   { id: AppID.Study, name: '自习室', icon: 'Study', color: 'emerald' },
   { id: AppID.Game, name: 'TRPG', icon: 'Game', color: 'orange' },
   { id: AppID.Novel, name: '笔友会', icon: 'Novel', color: 'amber' },
