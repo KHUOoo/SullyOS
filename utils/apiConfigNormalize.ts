@@ -18,6 +18,7 @@ export const normalizeApiModel = (value: unknown): string =>
 
 export function normalizeApiConfig(config: APIConfig): APIConfig {
   const visionApi = config.visionApi;
+  const imageGenApi = config.imageGenApi;
   return {
     ...config,
     baseUrl: normalizeApiBaseUrl(config.baseUrl),
@@ -29,6 +30,20 @@ export function normalizeApiConfig(config: APIConfig): APIConfig {
         baseUrl: normalizeApiBaseUrl(visionApi.baseUrl),
         apiKey: normalizeApiCredential(visionApi.apiKey),
         model: normalizeApiModel(visionApi.model),
+      },
+    } : {}),
+    ...(imageGenApi ? {
+      imageGenApi: {
+        ...imageGenApi,
+        enabled: imageGenApi.enabled === true,
+        baseUrl: normalizeApiBaseUrl(imageGenApi.baseUrl),
+        apiKey: normalizeApiCredential(imageGenApi.apiKey),
+        model: normalizeApiModel(imageGenApi.model),
+        count: Math.max(1, Math.min(4, Math.round(Number(imageGenApi.count) || 1))),
+        timeoutMs: Math.max(10_000, Math.min(600_000, Math.round(Number(imageGenApi.timeoutMs) || 120_000))),
+        similarity: Math.max(0, Math.min(1, Number(imageGenApi.similarity) || 0)),
+        referenceImage: String(imageGenApi.referenceImage || '').trim(),
+        useRecentChatImages: imageGenApi.useRecentChatImages === true,
       },
     } : {}),
   };
