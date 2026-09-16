@@ -263,11 +263,36 @@ export interface VisionApiConfig {
   model: string;
 }
 
+export type ImageGenAspectRatio = 'auto' | '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4' | '9:16' | '16:9';
+export type ImageGenReferenceMode = 'off' | 'avatar' | 'global' | 'hybrid' | 'character';
+
+/** 独立生图 API。默认按 OpenAI Images API 的 generations / edits 契约调用。 */
+export interface ImageGenApiConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** auto 会根据 aspectRatio 映射为图片模型常见的竖/方/横尺寸。 */
+  size: 'auto' | '1024x1024' | '1024x1536' | '1536x1024';
+  aspectRatio: ImageGenAspectRatio;
+  count: number;
+  timeoutMs: number;
+  referenceMode: ImageGenReferenceMode;
+  /** 全局参考图；data/blobref/http(s) 均可。 */
+  referenceImage?: string;
+  /** 0-1。用于提示词身份约束，并在支持 edits 的模型上切换 high input_fidelity。 */
+  similarity: number;
+  /** 把最近聊天里的图片也作为参考图发送到 edits。 */
+  useRecentChatImages?: boolean;
+}
+
 export interface APIConfig {
   baseUrl: string;
   apiKey: string;
   // 可选识图中转：给不支持 image_url 的主模型补视觉能力。
   visionApi?: VisionApiConfig;
+  /** 聊天里“拍给我看”使用的独立图片生成接口。 */
+  imageGenApi?: ImageGenApiConfig;
   minimaxApiKey?: string;
   minimaxGroupId?: string;
   // 'domestic' → https://api.minimaxi.com (国内站)
@@ -2730,6 +2755,8 @@ export interface CharacterProfile {
   id: string;
   name: string;
   avatar: string;
+  /** 该角色的生图锁脸参考图；只存轻量令牌/URL，二进制仍在 blob_assets。 */
+  imageGenReferenceImages?: string[];
   /**
    * 视频通话使用的本地 VRM / Live2D 形象。模型二进制包保存在 IndexedDB
    * blob_assets，角色资料只保存轻量索引，避免把数 MB 的模型塞进
