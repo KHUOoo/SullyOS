@@ -46,6 +46,7 @@ import MemoryRepairPortal from '../components/chat/MemoryRepairPortal';
 import FavoritesPortal from '../components/chat/VoiceFavoritesPortal';
 import ChatModals from '../components/chat/ChatModals';
 import ChatHistoryCleanupModal from '../components/chat/ChatHistoryCleanupModal';
+import CharacterPhotoModal from '../components/chat/CharacterPhotoModal';
 import type { ChatCleanupPlan } from '../utils/chatHistoryCleanup';
 import Modal from '../components/os/Modal';
 import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
@@ -118,6 +119,7 @@ import {
     validateInstallableArtifact,
 } from '../features/collaboration/makers';
 import { upsertMountedWorldbooks } from '../utils/worldbook';
+import { buildCharacterPhotoPrompt, generateCharacterPhotos, isCharacterPhotoRequestText, type CharacterPhotoMode } from '../utils/imageGenApi';
 
 const CollaborationWindow = React.lazy(() => import('../features/collaboration/CollaborationWindow'));
 
@@ -171,6 +173,10 @@ const Chat: React.FC = () => {
     const [collaborationPreviewAssetId, setCollaborationPreviewAssetId] = useState<string | null>(null);
     const [memoryRepairOpen, setMemoryRepairOpen] = useState(false);
     const [favoritesOpen, setFavoritesOpen] = useState(false);
+    const [characterPhotoOpen, setCharacterPhotoOpen] = useState(false);
+    const [characterPhotoBusy, setCharacterPhotoBusy] = useState(false);
+    const [characterPhotoInitialNote, setCharacterPhotoInitialNote] = useState('');
+    const [characterPhotoFromChat, setCharacterPhotoFromChat] = useState(false);
     
     // Emoji State
     const [emojis, setEmojis] = useState<Emoji[]>([]);
@@ -1415,6 +1421,16 @@ const Chat: React.FC = () => {
             return;
         }
 
+        // 明确的短句“拍给我看 / 发张自拍”等，与加号面板入口走同一套生图流程。
+        // 先弹确认让用户选照片类型；确认后再把原句落进聊天，避免误触时污染记录。
+        if (!customContent && type === 'text' && isCharacterPhotoRequestText(text)) {
+            setCharacterPhotoInitialNote(text);
+            setCharacterPhotoFromChat(true);
+            setCharacterPhotoOpen(true);
+            setShowPanel('none');
+            return;
+        }
+
         if (!customContent) { setInput(''); localStorage.removeItem(draftKey); }
         
         // 图片 / 表情消息存的是短令牌，图片二进制单独躺在 blob_assets 里，省掉 base64 那 ~33%
@@ -1737,6 +1753,81 @@ const Chat: React.FC = () => {
         }
     };
 
+    const handleCharacterPhotoSubmit = async (mode: CharacterPhotoMode, note: string) => {
+        if (!char || characterPhotoBusy) return;
+        const imageConfig = apiConfig.imageGenApi;
+        if (!imageConfig?.enabled) {
+            addToast('请先到设置 → 生图 API 开启并填写接口', 'info');
+            return;
+        }
+        setCharacterPhotoBusy(true);
+        try {
+            let promptMessages = messages;
+            const trimmedNote = note.trim();
+            if (characterPhotoFromChat && characterPhotoInitialNote.trim()) {
+                const requestText = characterPhotoInitialNote.trim();
+                await DB.saveMessage({ charId: char.id, role: 'user', type: 'text', content: requestText });
+                promptMessages = await DB.getRecentMessagesByCharId(char.id, 200);
+                setCharacterPhotoFromChat(false);
+                setInput('');
+                localStorage.removeItem(draftKey);
+            }
+            const prompt = await buildCharacterPhotoPrompt({
+                char,
+                user: userProfile,
+                messages: promptMessages,
+                mode,
+                note: trimmedNote,
+                apiConfig,
+            });
+            const generated = await generateCharacterPhotos({ prompt, char, messages: promptMessages, apiConfig });
+            for (const image of generated) {
+                let stored = image.startsWith('data:') ? await migrateDataUrlToRef(image) : image;
+                // DALL-E / 部分兼容接口返回的是短期 URL；能拉下来就立刻转成本地 Blob，
+                // 避免几小时后聊天气泡和相册一起失效。CORS 不允许时保留原 URL 兜底。
+                if (/^https?:\/\//i.test(image)) {
+                    try {
+                        const response = await fetch(image);
+                        if (response.ok) stored = await putImageBlob(await response.blob());
+                    } catch { /* keep remote URL */ }
+                }
+                const sourceMessageId = await DB.saveMessage({
+                    charId: char.id,
+                    role: 'assistant',
+                    type: 'image',
+                    content: stored,
+                    metadata: { source: 'character_photo', photoMode: mode, prompt },
+                });
+                try {
+                    await DB.saveGalleryImage({
+                        id: `img-${Date.now()}-${Math.random()}`,
+                        charId: char.id,
+                        url: stored,
+                        timestamp: Date.now(),
+                        sourceMessageId,
+                        savedDate: localDateKey,
+                        chatContext: promptMessages.slice(-10).map(message => `${message.role === 'assistant' ? char.name : userProfile.name}: ${message.type === 'text' ? message.content.slice(0, 100) : '[图片]'}`),
+                    });
+                } catch (galleryError) {
+                    console.warn('[Chat] 生成图片存入相册失败，聊天消息已保留', galleryError);
+                }
+            }
+            markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
+            await reloadMessages(visibleCountRef.current);
+            setCharacterPhotoOpen(false);
+            setCharacterPhotoInitialNote('');
+            setCharacterPhotoFromChat(false);
+            addToast(generated.length > 1 ? `${char.name} 发来了 ${generated.length} 张照片` : `${char.name} 发来了一张照片`, 'success');
+        } catch (error: any) {
+            console.error('[Chat] character photo generation failed', error);
+            const detail = error?.message || String(error) || '生图失败';
+            addToast(detail, 'error');
+            if (detail.length > 80) showError('角色照片生成失败', detail);
+        } finally {
+            setCharacterPhotoBusy(false);
+        }
+    };
+
     const handlePanelAction = (type: string, payload?: any) => {
         // 只统计「打开某个面板 / 开关某个能力」这几个固定入口，名单写死在这里；
         // 选表情、选分类之类的动作不上报。
@@ -1751,6 +1842,12 @@ const Chat: React.FC = () => {
             trackEvent('打开聊天功能面板项', { action: type });
         }
         switch (type) {
+            case 'character-photo':
+                setShowPanel('none');
+                setCharacterPhotoInitialNote('');
+                setCharacterPhotoFromChat(false);
+                setCharacterPhotoOpen(true);
+                break;
             case 'collaboration': setShowPanel('none'); setCollaborationOpen(true); break;
             case 'memory-link': setShowPanel('none'); setMemoryRepairOpen(true); break;
             case 'favorites': setShowPanel('none'); setFavoritesOpen(true); break;
@@ -3453,7 +3550,7 @@ const Chat: React.FC = () => {
         active: activeApp === AppID.Chat && !!char,
         blocked: isInputFocused || !!input.trim() || showPanel !== 'none' || modalType !== 'none'
             || selectionMode || isSummarizing || collaborationOpen || memoryRepairOpen || favoritesOpen
-            || showProactiveModal || showActiveMsg2Modal || showThinkingChainModal
+            || showProactiveModal || showActiveMsg2Modal || showThinkingChainModal || characterPhotoOpen || characterPhotoBusy
             || mcdAppOpen || luckinAppOpen || showForwardModal,
         generating: isTyping || instantChatPending || isProactiveComposing,
         onGenerate: handleManualTrigger,
@@ -4403,6 +4500,21 @@ const Chat: React.FC = () => {
 
 
             {/* Proactive Settings Modal */}
+            {char && (
+                <CharacterPhotoModal
+                    open={characterPhotoOpen}
+                    characterName={char.name}
+                    initialNote={characterPhotoInitialNote}
+                    busy={characterPhotoBusy}
+                    onClose={() => {
+                        setCharacterPhotoOpen(false);
+                        setCharacterPhotoInitialNote('');
+                        setCharacterPhotoFromChat(false);
+                    }}
+                    onSubmit={handleCharacterPhotoSubmit}
+                />
+            )}
+
             {char && (
                 <ProactiveSettingsModal
                     isOpen={showProactiveModal}
