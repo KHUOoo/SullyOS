@@ -35,6 +35,7 @@ import VersionInfo from '../components/settings/VersionInfo';
 import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import StorageUsagePanel from '../components/settings/StorageUsagePanel';
+import ImageGenSettingsPanel from '../components/settings/ImageGenSettingsPanel';
 import McpConnectionConsole from '../components/settings/McpConnectionConsole';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
@@ -2724,6 +2725,14 @@ const Settings: React.FC = () => {
                     </div>
                 )}
             </div>
+        </SettingsSection>
+
+        <SettingsSection
+            title="生图 API"
+            badge={<span className={`text-[9px] font-bold px-2 py-1 rounded-full ${apiConfig.imageGenApi?.enabled ? 'bg-fuchsia-100 text-fuchsia-600' : 'bg-slate-100 text-slate-400'}`}>{apiConfig.imageGenApi?.enabled ? '已接入' : '未接入'}</span>}
+            icon={<div className="p-2 bg-fuchsia-100/60 rounded-xl text-fuchsia-600"><Sun className="w-4 h-4" weight="bold" /></div>}
+        >
+            <ImageGenSettingsPanel apiConfig={apiConfig} updateApiConfig={updateApiConfig} addToast={addToast} />
         </SettingsSection>
 
         {/* API 调用记录入口 — 点开看最近 5 天各 App / 角色 / 用途的调用明细 */}
