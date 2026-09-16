@@ -136,7 +136,27 @@ const Character: React.FC = () => {
       characterLaunch.consume();
   }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageGenReferenceInputRef = useRef<HTMLInputElement>(null);
   const cardImportRef = useRef<HTMLInputElement>(null);
+
+  const handleImageGenReferenceUpload = async (file?: File) => {
+      if (!file || !formData) return;
+      if ((formData.imageGenReferenceImages || []).length >= 5) {
+          addToast('每个角色最多保存 5 张锁脸参考图', 'info');
+          return;
+      }
+      try {
+          const dataUrl = await processImage(file, { maxWidth: 1536, quality: 0.88, forceJpeg: true });
+          const token = await migrateDataUrlToRef(dataUrl);
+          setFormData(current => current ? {
+              ...current,
+              imageGenReferenceImages: [...(current.imageGenReferenceImages || []), token],
+          } : current);
+          addToast('锁脸参考图已保存', 'success');
+      } catch (error: any) {
+          addToast(error?.message || '参考图处理失败', 'error');
+      }
+  };
   
   // Race Condition Guards
   const editingIdRef = useRef<string | null>(null);
@@ -1410,6 +1430,45 @@ ${isInitialGeneration ? `
                                     className="w-full h-24 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll"
                                     placeholder="在这个世界里，魔法是存在的..."
                                 />
+                           </div>
+
+                           <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-3">
+                               <div className="flex items-start justify-between gap-3">
+                                   <div>
+                                       <label className="text-[10px] font-bold text-fuchsia-500 uppercase tracking-widest block">生图锁脸参考</label>
+                                       <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">设置里的锁脸模式选“每角色参考图”时使用。建议上传清晰正脸，可放不同角度，最多 5 张。</p>
+                                   </div>
+                                   <button
+                                       type="button"
+                                       onClick={() => imageGenReferenceInputRef.current?.click()}
+                                       disabled={(formData.imageGenReferenceImages || []).length >= 5}
+                                       className="shrink-0 px-3 py-2 rounded-xl bg-fuchsia-50 text-fuchsia-600 text-[11px] font-bold disabled:opacity-40"
+                                   >
+                                       ＋上传
+                                   </button>
+                                   <input
+                                       ref={imageGenReferenceInputRef}
+                                       type="file"
+                                       accept="image/*"
+                                       className="hidden"
+                                       onChange={event => { void handleImageGenReferenceUpload(event.target.files?.[0]); event.currentTarget.value = ''; }}
+                                   />
+                               </div>
+                               {(formData.imageGenReferenceImages || []).length > 0 ? (
+                                   <div className="grid grid-cols-5 gap-2">
+                                       {(formData.imageGenReferenceImages || []).map((image, index) => (
+                                           <div key={`${image}-${index}`} className="relative aspect-square overflow-hidden rounded-xl bg-slate-100">
+                                               <TokenImg value={image} className="h-full w-full object-cover" alt={`参考图 ${index + 1}`} />
+                                               <button
+                                                   type="button"
+                                                   aria-label={`删除参考图 ${index + 1}`}
+                                                   onClick={() => handleChange('imageGenReferenceImages', (formData.imageGenReferenceImages || []).filter((_, itemIndex) => itemIndex !== index))}
+                                                   className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/55 text-xs text-white"
+                                               >×</button>
+                                           </div>
+                                       ))}
+                                   </div>
+                               ) : <p className="text-center text-[10px] text-slate-300 py-2">还没有角色专属参考图</p>}
                            </div>
 
                            {/* 时间感知 & 时区：三个独立开关，可任意组合（聊天时间感知 / 自定义时区 / 线下时间感知） */}
