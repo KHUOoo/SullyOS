@@ -14,6 +14,7 @@ import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import type { CharacterProfile, SocialAppProfile, SocialComment, SocialPost, SubAccount } from '../types';
 import {
+    buildCharacterMomentFocusPlan,
     buildSparkCommentHistory,
     buildSparkGenerationContext,
     getSparkHandles,
@@ -260,7 +261,10 @@ const MomentsApp: React.FC = () => {
         trackEvent('删除一条帖子');
     };
 
-    const buildGenerationContext = async (participants: CharacterProfile[]): Promise<string> => {
+    const buildGenerationContext = async (
+        participants: CharacterProfile[],
+        mode: 'interaction' | 'character_feed' = 'interaction',
+    ): Promise<string> => {
         const recentEntries = await Promise.all(participants.map(async character => [
             character.id,
             await loadCharacterContextMessages(character),
@@ -271,6 +275,7 @@ const MomentsApp: React.FC = () => {
             socialProfile,
             characterHandles,
             Object.fromEntries(recentEntries),
+            mode,
         ).replace(/Spark/g, '朋友圈');
     };
 
@@ -380,17 +385,28 @@ const MomentsApp: React.FC = () => {
         trackEvent('刷新 Spark 推荐流');
         try {
             const participants = shuffle(characters).slice(0, Math.min(5, characters.length));
-            const context = await buildGenerationContext(participants);
+            const postCount = Math.min(Math.max(participants.length, 2), 5);
+            const focusPlan = buildCharacterMomentFocusPlan(postCount);
+            const focusSlots = focusPlan.map((focus, index) => `${index + 1}. ${focus}`).join('\n');
+            const context = await buildGenerationContext(participants, 'character_feed');
             const prompt = `### 任务：生成角色朋友圈
-请生成 ${Math.min(Math.max(participants.length, 2), 5)} 条朋友圈动态，只允许本次角色发帖，不生成路人。
-每条要符合作者人设、近期生活和与用户的关系；像真实生活记录，不要写成小说旁白或总结报告。
+请严格按下面 ${postCount} 个内容槽位依次生成朋友圈动态，只允许本次角色发帖，不生成路人：
+${focusSlots}
+
+内容比例和口吻是硬性规则：
+- personal_life（约 60%）：只写角色自己的生活。选取角色当天真实可能经历的工作、学习、兴趣、吃饭、出门、房间、天气、物件或情绪；不得围绕用户展开，不得出现用户姓名，不得用“你”向用户喊话。
+- user_related（约 40%）：可以与用户、共同经历或关系有关，但仍是角色在公开分享自己的生活与感受，不是发给用户的一条私信。
+- 两类都禁止写成隔空聊天、回复、叮嘱或命令。不要出现“听话”“乖孩子”“别熬了”“快去睡”“明早叫你”“给我回复”“在吗”等私聊句式，也不要整段都在对用户说话。
+- 每条正文至少落到一个角色自己的具体生活事实、动作、场景或物件。与用户相关的内容也必须保留角色自己的生活主体。
+- 每条要符合作者人设，像真实生活记录，不要写成小说旁白、总结报告或情感喊话。
 authorName 必须使用作者自己的可用账号，charId 必须原样复制。
+focus 必须严格复制对应槽位的 personal_life 或 user_related，不得调换、遗漏或自行改变比例。
 无论最终是否发图，都要为每条动态补充角色的 currentState，以及从固定类型池中选择 imageType。
 imageType 只能是：自拍、风景、食物、桌面 / 学习台 / 工作台、房间一角、穿搭、出门随拍、天气 / 窗景、宠物 / 玩偶 / 小物件、当前生活场景记录。
 scene 与 atmosphere 只描述符合正文的日常画面，不要写海报、广告、影楼写真或超现实场景。
 
 仅输出 JSON 数组：
-[{"authorName":"角色账号名","charId":"角色ID","content":"朋友圈正文","currentState":"角色此刻的情绪或状态","imageType":"固定类型池中的一种","scene":"适合正文的真实生活场景","atmosphere":"自然日常的氛围关键词","likes":0}]`;
+[{"authorName":"角色账号名","charId":"角色ID","focus":"personal_life 或 user_related","content":"朋友圈正文","currentState":"角色此刻的情绪或状态","imageType":"固定类型池中的一种","scene":"适合正文的真实生活场景","atmosphere":"自然日常的氛围关键词","likes":0}]`;
             const json = await runWithController(controller => requestChatJson(context, prompt, '刷新角色动态', controller));
             const now = Date.now();
             const entries: Array<{
