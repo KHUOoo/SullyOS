@@ -3759,6 +3759,8 @@ export interface SocialComment {
     isCharacter?: boolean;
     authorType?: 'user' | 'character' | 'stranger';
     authorCharId?: string;
+    replyToCommentId?: string;
+    replyToName?: string;
 }
 
 export interface SocialPost {
