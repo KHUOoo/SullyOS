@@ -3777,6 +3777,7 @@ export interface SocialPost {
     bgStyle?: string;
     authorType?: 'user' | 'character' | 'stranger';
     authorCharId?: string;
+    translationZh?: string;
 }
 
 export interface SubAccount {

@@ -25,6 +25,7 @@ import { processImageToBlob } from '../utils/file';
 import { isImageValue, migrateDataUrlToRef, putImageBlob } from '../utils/blobRef';
 import { extractContent, safeResponseJson } from '../utils/safeApi';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
+import { buildMomentTranslationMessages, shouldOfferMomentTranslation } from '../utils/momentTranslation';
 import { trackEvent } from '../utils/analytics';
 import {
     buildMomentPhotoPrompt,
@@ -172,6 +173,7 @@ const MomentsApp: React.FC = () => {
     const [commentInput, setCommentInput] = useState('');
     const [isReplying, setIsReplying] = useState(false);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
+    const [translationStates, setTranslationStates] = useState<Record<string, { expanded: boolean; loading: boolean }>>({});
 
     const feedRef = useRef<SocialPost[]>([]);
     const coverInputRef = useRef<HTMLInputElement>(null);
@@ -315,6 +317,67 @@ const MomentsApp: React.FC = () => {
             return await task(controller);
         } finally {
             requestControllersRef.current.delete(controller);
+        }
+    };
+
+    const toggleMomentTranslation = async (post: SocialPost) => {
+        const currentState = translationStates[post.id];
+        if (currentState?.loading) return;
+
+        if (post.translationZh?.trim()) {
+            setTranslationStates(current => ({
+                ...current,
+                [post.id]: { expanded: !current[post.id]?.expanded, loading: false },
+            }));
+            return;
+        }
+
+        if (!apiConfig.apiKey) {
+            addToast('请先在设置里配置聊天 API', 'error');
+            return;
+        }
+
+        setTranslationStates(current => ({
+            ...current,
+            [post.id]: { expanded: true, loading: true },
+        }));
+
+        try {
+            const translation = await runWithController(async controller => {
+                const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${apiConfig.apiKey}`,
+                    },
+                    body: JSON.stringify({
+                        model: apiConfig.model,
+                        messages: buildMomentTranslationMessages(post.content),
+                        temperature: 0.1,
+                        max_tokens: 1200,
+                    }),
+                    signal: controller.signal,
+                    __sullyMeta: { appId: 'social', appName: '朋友圈', purpose: '翻译朋友圈动态' },
+                } as RequestInit);
+                if (!response.ok) throw new Error(await readApiError(response));
+                const data = await safeResponseJson(response);
+                return extractContent(data).trim();
+            });
+
+            if (!translation) throw new Error('翻译结果为空');
+            updatePost(post.id, current => ({ ...current, translationZh: translation }));
+            setTranslationStates(current => ({
+                ...current,
+                [post.id]: { expanded: true, loading: false },
+            }));
+        } catch (error) {
+            if ((error as Error)?.name === 'AbortError') return;
+            console.error('Failed to translate Moment:', error);
+            setTranslationStates(current => ({
+                ...current,
+                [post.id]: { expanded: false, loading: false },
+            }));
+            addToast(`翻译失败：${(error as Error)?.message || '请稍后再试'}`, 'error');
         }
     };
 
@@ -855,10 +918,30 @@ ${buildSparkCommentHistory(post)}
                                 <div className="min-w-0 flex-1">
                                     <div className="text-[15px] font-semibold leading-5 text-[#53688f]">{post.authorName}</div>
                                     {post.content && <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-[1.45] text-[#202020]">{post.content}</p>}
+                                    {post.translationZh && translationStates[post.id]?.expanded && (
+                                        <div className="mt-2 border-l-2 border-[#d7dbe2] bg-[#f6f7f8] px-2.5 py-2 text-[14px] leading-[1.5] text-[#4a4a4a]">
+                                            <div className="mb-0.5 text-[10px] text-[#999]">中文翻译</div>
+                                            <p className="whitespace-pre-wrap break-words">{post.translationZh}</p>
+                                        </div>
+                                    )}
                                     <ImageGrid images={post.images || []} background={post.bgStyle} onPreview={setPreviewImage} />
                                     <div className="relative mt-2 flex items-center justify-between text-[11px] text-[#999]">
                                         <div className="flex items-center gap-2">
                                             <span>{formatMomentTime(post.timestamp)}</span>
+                                            {post.authorType === 'character' && shouldOfferMomentTranslation(post.content) && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void toggleMomentTranslation(post)}
+                                                    disabled={translationStates[post.id]?.loading}
+                                                    className="text-[#53688f] disabled:opacity-60"
+                                                >
+                                                    {translationStates[post.id]?.loading
+                                                        ? '翻译中…'
+                                                        : post.translationZh && translationStates[post.id]?.expanded
+                                                            ? '收起翻译'
+                                                            : '翻译'}
+                                                </button>
+                                            )}
                                             {post.authorType === 'user' && (
                                                 <button type="button" onClick={() => removePost(post.id)} className="text-[#53688f]">删除</button>
                                             )}
