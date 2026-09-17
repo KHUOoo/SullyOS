@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SocialComment, SocialPost } from '../types';
-import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from './socialFeedMerge';
+import { buildSocialCommentThreads, mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from './socialFeedMerge';
 
 const post = (id: string, comments: SocialComment[] = []): SocialPost => ({
     id,
@@ -47,5 +47,25 @@ describe('social feed race-safe merging', () => {
     it('does not duplicate a retried comment result', () => {
         const existing = comment('same');
         expect(mergeSocialComments([existing], [existing])).toEqual([existing]);
+    });
+
+    it('keeps replies underneath the comment they answer', () => {
+        const characterComment = comment('character-comment', 'character');
+        const userReply = {
+            ...comment('user-reply', 'user'),
+            replyToCommentId: characterComment.id,
+            replyToName: characterComment.authorName,
+        };
+        const characterReply = {
+            ...comment('character-reply', 'character'),
+            replyToCommentId: userReply.id,
+            replyToName: userReply.authorName,
+        };
+
+        const threads = buildSocialCommentThreads([characterComment, userReply, characterReply]);
+        expect(threads).toHaveLength(1);
+        expect(threads[0].comment.id).toBe(characterComment.id);
+        expect(threads[0].replies[0].comment.id).toBe(userReply.id);
+        expect(threads[0].replies[0].replies[0].comment.id).toBe(characterReply.id);
     });
 });
