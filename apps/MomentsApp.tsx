@@ -21,10 +21,17 @@ import {
 } from '../utils/socialGeneration';
 import { loadCharacterContextMessages } from '../utils/chatContextRange';
 import { processImageToBlob } from '../utils/file';
-import { isImageValue, putImageBlob } from '../utils/blobRef';
+import { isImageValue, migrateDataUrlToRef, putImageBlob } from '../utils/blobRef';
 import { extractContent, safeResponseJson } from '../utils/safeApi';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
 import { trackEvent } from '../utils/analytics';
+import {
+    buildMomentPhotoPrompt,
+    generateCharacterPhotos,
+    normalizeMomentPhotoType,
+    shouldGenerateMomentImage,
+    type MomentPhotoType,
+} from '../utils/imageGenApi';
 import Modal from '../components/os/Modal';
 import TokenImg from '../components/os/TokenImg';
 
@@ -39,8 +46,6 @@ const POST_BACKGROUNDS = [
     'linear-gradient(135deg,#f6e3d7 0%,#e9eff8 100%)',
     'linear-gradient(135deg,#e6def6 0%,#f3ebdf 100%)',
 ];
-
-const FALLBACK_EMOJIS = ['☕️', '🌙', '📷', '🍃', '🎧', '✨', '🌧️', '🍰'];
 
 const randomItem = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 const shuffle = <T,>(items: T[]): T[] => [...items].sort(() => Math.random() - 0.5);
@@ -380,12 +385,26 @@ const MomentsApp: React.FC = () => {
 请生成 ${Math.min(Math.max(participants.length, 2), 5)} 条朋友圈动态，只允许本次角色发帖，不生成路人。
 每条要符合作者人设、近期生活和与用户的关系；像真实生活记录，不要写成小说旁白或总结报告。
 authorName 必须使用作者自己的可用账号，charId 必须原样复制。
+无论最终是否发图，都要为每条动态补充角色的 currentState，以及从固定类型池中选择 imageType。
+imageType 只能是：自拍、风景、食物、桌面 / 学习台 / 工作台、房间一角、穿搭、出门随拍、天气 / 窗景、宠物 / 玩偶 / 小物件、当前生活场景记录。
+scene 与 atmosphere 只描述符合正文的日常画面，不要写海报、广告、影楼写真或超现实场景。
 
 仅输出 JSON 数组：
-[{"authorName":"角色账号名","charId":"角色ID","content":"朋友圈正文","emoji":"一个适合当占位配图的 emoji","likes":0}]`;
+[{"authorName":"角色账号名","charId":"角色ID","content":"朋友圈正文","currentState":"角色此刻的情绪或状态","imageType":"固定类型池中的一种","scene":"适合正文的真实生活场景","atmosphere":"自然日常的氛围关键词","likes":0}]`;
             const json = await runWithController(controller => requestChatJson(context, prompt, '刷新角色动态', controller));
             const now = Date.now();
-            const posts: SocialPost[] = json.flatMap((item, index) => {
+            const entries: Array<{
+                post: SocialPost;
+                character: CharacterProfile;
+                messages: Awaited<ReturnType<typeof loadCharacterContextMessages>>;
+                shouldGenerateImage: boolean;
+                imageType: MomentPhotoType;
+                currentState: string;
+                scene: string;
+                atmosphere: string;
+            }> = [];
+            for (let index = 0; index < json.length; index += 1) {
+                const item = json[index];
                 const author = resolveSparkAuthor(
                     { ...item, isCharacter: true },
                     participants,
@@ -393,14 +412,16 @@ authorName 必须使用作者自己的可用账号，charId 必须原样复制�
                     characterHandles,
                     [socialProfile.name, userProfile.name],
                 );
-                if (!author?.character || typeof item.content !== 'string' || !item.content.trim()) return [];
-                return [{
+                if (!author?.character || typeof item.content !== 'string' || !item.content.trim()) continue;
+                const post: SocialPost = {
                     id: `character-moment-${now}-${index}-${Math.random()}`,
                     authorName: author.name,
                     authorAvatar: author.character.avatar,
                     title: '',
                     content: item.content.trim(),
-                    images: [typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji.trim() : randomItem(FALLBACK_EMOJIS)],
+                    // 新动态先作为纯文字落库；命中 30% 且生图成功后再原位补一张图。
+                    // 这样超时、报错或异常响应天然降级，不会拖垮整次朋友圈刷新。
+                    images: [],
                     likes: Number.isFinite(Number(item.likes)) ? Number(item.likes) : 0,
                     isCollected: false,
                     isLiked: false,
@@ -410,11 +431,67 @@ authorName 必须使用作者自己的可用账号，charId 必须原样复制�
                     bgStyle: randomItem(POST_BACKGROUNDS),
                     authorType: 'character' as const,
                     authorCharId: author.character.id,
-                }];
-            });
+                };
+                entries.push({
+                    post,
+                    character: author.character,
+                    messages: await loadCharacterContextMessages(author.character),
+                    shouldGenerateImage: shouldGenerateMomentImage(),
+                    imageType: normalizeMomentPhotoType(item.imageType),
+                    currentState: typeof item.currentState === 'string' ? item.currentState.trim() : '',
+                    scene: typeof item.scene === 'string' ? item.scene.trim() : '',
+                    atmosphere: typeof item.atmosphere === 'string' ? item.atmosphere.trim() : '',
+                });
+            }
+            const posts = entries.map(entry => entry.post);
             if (posts.length === 0) throw new Error('模型没有返回可用的角色动态');
             persistNewPosts(posts);
             addToast('大家的新动态已经出现了', 'success');
+
+            // 图片在后台补齐。刷新按钮和纯文字动态不会等待生图；任何单条失败都保留正文。
+            if (apiConfig.imageGenApi?.enabled) {
+                void Promise.allSettled(entries
+                    .filter(entry => entry.shouldGenerateImage)
+                    .map(async entry => {
+                        try {
+                            const imagePrompt = await buildMomentPhotoPrompt({
+                                char: entry.character,
+                                user: userProfile,
+                                messages: entry.messages,
+                                content: entry.post.content,
+                                currentState: entry.currentState,
+                                imageType: entry.imageType,
+                                scene: entry.scene,
+                                atmosphere: entry.atmosphere,
+                                apiConfig,
+                            });
+                            const [image] = await generateCharacterPhotos({
+                                prompt: imagePrompt,
+                                char: entry.character,
+                                messages: entry.messages,
+                                apiConfig,
+                                count: 1,
+                                surface: 'moments',
+                            });
+                            if (!image) return;
+                            let stored = image.startsWith('data:') ? await migrateDataUrlToRef(image) : image;
+                            if (/^https?:\/\//i.test(image)) {
+                                try {
+                                    const response = await fetch(image);
+                                    if (response.ok) stored = await putImageBlob(await response.blob());
+                                } catch { /* CORS 等情况保留远端 URL */ }
+                            }
+                            updatePost(entry.post.id, current => ({
+                                ...current,
+                                images: [stored],
+                                bgStyle: undefined,
+                            }));
+                        } catch (error) {
+                            // 朋友圈正文已经发布；生图失败按产品规则静默降级为纯文字。
+                            console.warn('[Moments] image generation failed; kept text-only post', error);
+                        }
+                    }));
+            }
         } catch (error: any) {
             if (error?.name !== 'AbortError') addToast(`刷新失败：${error?.message || error}`, 'error');
         } finally {
