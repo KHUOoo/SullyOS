@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { generateCharacterPhotos, imageSizeForAspectRatio, isCharacterPhotoRequestText, resolveImageGenConfig } from './imageGenApi';
+import {
+  CHAT_IMAGE_PROMPT_PREFIX,
+  MOMENT_IMAGE_PROMPT_PREFIX,
+  generateCharacterPhotos,
+  imageSizeForAspectRatio,
+  isCharacterPhotoRequestText,
+  normalizeMomentPhotoType,
+  resolveImageGenConfig,
+  shouldGenerateMomentImage,
+} from './imageGenApi';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -28,6 +37,21 @@ describe('imageGenApi', () => {
     expect(result.referenceMode).toBe('avatar');
   });
 
+  it('keeps chat and Moments image prefixes separate', () => {
+    expect(CHAT_IMAGE_PROMPT_PREFIX).toContain('私聊');
+    expect(CHAT_IMAGE_PROMPT_PREFIX).toContain('专门发给你看');
+    expect(MOMENT_IMAGE_PROMPT_PREFIX).toContain('朋友圈');
+    expect(MOMENT_IMAGE_PROMPT_PREFIX).toContain('手机随手拍');
+    expect(CHAT_IMAGE_PROMPT_PREFIX).not.toBe(MOMENT_IMAGE_PROMPT_PREFIX);
+  });
+
+  it('uses a 30 percent boundary and constrains Moments photo types', () => {
+    expect(shouldGenerateMomentImage(() => 0.2999)).toBe(true);
+    expect(shouldGenerateMomentImage(() => 0.3)).toBe(false);
+    expect(normalizeMomentPhotoType('食物')).toBe('食物');
+    expect(normalizeMomentPhotoType('未知的商业大片')).toBe('当前生活场景记录');
+  });
+
   it('calls the OpenAI-compatible generations endpoint and accepts b64_json', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       data: [{ b64_json: 'QUJD' }],
@@ -50,8 +74,34 @@ describe('imageGenApi', () => {
 
     expect(images).toEqual(['data:image/png;base64,QUJD']);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://image.example/v1/images/generations');
-    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect((fetchMock as any).mock.calls[0][0]).toBe('https://image.example/v1/images/generations');
+    const request = (fetchMock as any).mock.calls[0][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toMatchObject({ model: 'image-model', n: 1, size: '1024x1536' });
+  });
+
+  it('lets Moments force one image even when chat settings request more', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ b64_json: 'QUJD' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateCharacterPhotos({
+      prompt: '朋友圈照片',
+      char: { id: 'char-1', name: '角色', avatar: '🙂' } as any,
+      messages: [],
+      count: 1,
+      surface: 'moments',
+      apiConfig: {
+        baseUrl: 'https://image.example/v1/', apiKey: 'secret', model: 'chat-model',
+        imageGenApi: {
+          enabled: true, baseUrl: 'https://image.example/v1/', apiKey: 'image-key', model: 'image-model',
+          size: 'auto', aspectRatio: '2:3', count: 4, timeoutMs: 120000,
+          referenceMode: 'off', similarity: 0.8,
+        },
+      },
+    });
+
+    const request = (fetchMock as any).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({ n: 1 });
   });
 });
