@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CharacterProfile, Message, SocialPost, UserProfile } from '../types';
-import { buildSparkCommentHistory, buildSparkGenerationContext, resolveSparkAuthor, selectSparkParticipants } from './socialGeneration';
+import { buildCharacterMomentFocusPlan, buildSparkCommentHistory, buildSparkGenerationContext, resolveSparkAuthor, selectSparkParticipants } from './socialGeneration';
 
 const character = (id: string, name: string, systemPrompt: string) => ({
     id, name, systemPrompt, avatar: '', description: '', memories: [], timeAwarenessEnabled: false,
@@ -45,6 +45,20 @@ describe('Spark persona and conversation context', () => {
     it('supports characters without saved Spark handles', () => {
         expect(buildSparkGenerationContext([c], user, social, {}).includes('阿白')).toBe(true);
         expect(resolve({ author: '阿白', charId: 'c-id' }, [c])?.character).toBe(c);
+    });
+
+    it('makes character-feed context independent from the user by default', () => {
+        const context = buildSparkGenerationContext([a], user, social, handles, {
+            'a-id': [{ role: 'user', content: '快去睡觉' } as Message],
+        }, 'character_feed');
+        expect(context).toContain('角色拥有不围绕用户运转的独立生活');
+        expect(context).toContain('personal_life 动态不得围绕这些片段展开');
+    });
+
+    it('allocates a five-post refresh as 60% personal life and 40% user related', () => {
+        const plan = buildCharacterMomentFocusPlan(5, () => 0.5);
+        expect(plan.filter(focus => focus === 'personal_life')).toHaveLength(3);
+        expect(plan.filter(focus => focus === 'user_related')).toHaveLength(2);
     });
 });
 
