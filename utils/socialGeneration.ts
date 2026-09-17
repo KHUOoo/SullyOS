@@ -121,6 +121,7 @@ export function resolveSparkAuthor(
 export function buildSparkCommentHistory(post: SocialPost): string {
     return (post.comments || []).slice(-12).map(c => JSON.stringify({
         author: c.authorName, charId: c.authorCharId || null, authorType: c.authorType,
+        replyTo: c.replyToName || null,
         content: c.content.slice(0, 1200),
     })).join('\n') || '(暂无评论)';
 }
