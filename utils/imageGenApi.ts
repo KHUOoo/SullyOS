@@ -12,6 +12,41 @@ import { extractContent, safeFetchJson } from './safeApi';
 
 export type CharacterPhotoMode = 'selfie' | 'outfit' | 'food' | 'pov' | 'room' | 'free';
 
+export type MomentPhotoType =
+  | '自拍'
+  | '风景'
+  | '食物'
+  | '桌面 / 学习台 / 工作台'
+  | '房间一角'
+  | '穿搭'
+  | '出门随拍'
+  | '天气 / 窗景'
+  | '宠物 / 玩偶 / 小物件'
+  | '当前生活场景记录';
+
+export const MOMENT_PHOTO_TYPES: MomentPhotoType[] = [
+  '自拍',
+  '风景',
+  '食物',
+  '桌面 / 学习台 / 工作台',
+  '房间一角',
+  '穿搭',
+  '出门随拍',
+  '天气 / 窗景',
+  '宠物 / 玩偶 / 小物件',
+  '当前生活场景记录',
+];
+
+/** 朋友圈与聊天必须保留两套独立前缀，不能合并成一段通用“生活照”提示词。 */
+export const MOMENT_IMAGE_PROMPT_PREFIX = `生成一张适合发布在朋友圈中的生活化照片。
+整体风格自然、真实、轻松，具有普通手机随手拍的日常记录感和公开分享感，而不是专业影棚写真或商业宣传图。画面要像角色在真实生活中拍下并愿意发到朋友圈的内容。
+优先表现生活痕迹、即时感、轻微随意感、真实环境与自然氛围。允许轻微构图不完美、普通手机成像感，但整体仍需清晰、可辨认。
+不要海报感、广告感、影楼写真感、过度精修、超现实、夸张构图或明显 AI 感；不要脱离角色人设与朋友圈正文语境。`;
+
+export const CHAT_IMAGE_PROMPT_PREFIX = `生成一张适合角色在私聊中发送给用户的图片。
+图片必须服务于当前聊天语境，像角色为了回应用户、分享当下、展示某件事或表达情绪而此刻主动发来的内容。整体真实自然，具有即时交流感、私人分享感和“专门发给你看”的感觉。
+画面可以贴近聊天对象视角，但不要像朋友圈营业图、公开展示照、海报、广告、艺术大片或模板化精修图；不要与当前聊天内容、角色状态和双方关系脱节。`;
+
 export const CHARACTER_PHOTO_MODES: Array<{ id: CharacterPhotoMode; label: string; hint: string }> = [
   { id: 'selfie', label: '自拍', hint: '像角色刚拿手机随手拍下的自拍' },
   { id: 'outfit', label: '今日穿搭', hint: '展示角色今天真实会穿的衣服' },
@@ -68,6 +103,15 @@ const endpoint = (baseUrl: string, kind: 'generations' | 'edits'): string => {
 
 const modeInstruction = (mode: CharacterPhotoMode): string =>
   CHARACTER_PHOTO_MODES.find(item => item.id === mode)?.hint || CHARACTER_PHOTO_MODES[0].hint;
+
+export const normalizeMomentPhotoType = (value: unknown): MomentPhotoType => {
+  const clean = typeof value === 'string' ? value.trim() : '';
+  return MOMENT_PHOTO_TYPES.find(type => clean === type || clean.includes(type))
+    || '当前生活场景记录';
+};
+
+/** 长期统计为 70% 纯文字、30% 单图；传入 random 便于稳定测试。 */
+export const shouldGenerateMomentImage = (random: () => number = Math.random): boolean => random() < 0.3;
 
 const messagePreview = (message: Message, charName: string, userName: string): string => {
   const sender = message.role === 'assistant' ? charName : message.role === 'user' ? userName : '系统';
@@ -133,7 +177,94 @@ export async function buildCharacterPhotoPrompt(input: {
   );
   const prompt = extractContent(data).trim();
   if (!prompt) throw new Error('主聊天模型没有返回有效的生图提示词');
-  return prompt;
+  const chatPreview = recent.slice(-8).map(message => messagePreview(message, char.name, user.name)).join('\n') || '（暂无）';
+  return `${CHAT_IMAGE_PROMPT_PREFIX}
+
+发送者：${char.name}
+角色人设与双方关系：严格依照角色设定、记忆和近期聊天，不混淆角色与用户身份
+当前聊天内容：
+${chatPreview}
+发图目的：${input.note?.trim() || modeInstruction(mode)}
+图片类型：${modeInstruction(mode)}
+场景与氛围：${prompt}
+补充约束：这张图必须像 ${char.name} 此刻在私聊中主动发给用户看的内容；只生成单张图片，使用 ${ratio} 构图。`;
+}
+
+/**
+ * 朋友圈图片导演。正文先由朋友圈模型生成；这里再结合单个角色完整设定、
+ * 当前状态与近期私聊，把公开动态改写成适合图片模型的具体场景。
+ */
+export async function buildMomentPhotoPrompt(input: {
+  char: CharacterProfile;
+  user: UserProfile;
+  messages: Message[];
+  content: string;
+  currentState?: string;
+  imageType: MomentPhotoType;
+  scene?: string;
+  atmosphere?: string;
+  apiConfig: APIConfig;
+}): Promise<string> {
+  const { char, user, messages, apiConfig } = input;
+  if (!apiConfig.baseUrl || !apiConfig.apiKey || !apiConfig.model) {
+    throw new Error('请先配置主聊天 API；它负责根据角色设定写朋友圈生图提示词');
+  }
+
+  const recent = messages.slice(-30);
+  const core = ContextBuilder.buildCoreContext(
+    char,
+    user,
+    true,
+    undefined,
+    undefined,
+    { conversational: true, worldbookMessages: recent.map(message => ({ role: message.role, content: message.content })) },
+  );
+  const ratio = resolveImageGenConfig(apiConfig).aspectRatio;
+  const system = `${core}\n\n### 临时任务：朋友圈生活照片导演\n你不回复聊天内容，只为图片模型写一条完整摄影提示词。`
+    + `画面必须像 ${char.name} 在当前时间与生活情境中真实拍下并发布在朋友圈的单张照片。`
+    + `它是公开动态，但仍然日常、自然、不过度营业。若出现角色本人，要写清稳定外貌、动作、表情和服装；不得把用户与角色混成同一张脸。`
+    + `不要写“根据设定”“参考图”等元话语，不要解释，不要输出标题或 Markdown。`
+    + `输出单段中文提示词，包含主体、环境、生活痕迹、自然光线、手机镜头感与 ${ratio} 构图，控制在 1200 字内。`;
+  const request = [
+    `发布者：${char.name}`,
+    `当前状态：${input.currentState?.trim() || '按角色此刻的生活与情绪自然判断'}`,
+    `朋友圈正文：${input.content.trim()}`,
+    `图片类型：${input.imageType}`,
+    `场景要求：${input.scene?.trim() || '与正文和当前状态一致的真实生活场景'}`,
+    `氛围要求：${input.atmosphere?.trim() || '自然、松弛、真实的日常分享'}`,
+    '近期私聊只用于判断角色状态和与用户的关系，不能把私聊原文直接展示在公开画面中：',
+    recent.slice(-8).map(message => messagePreview(message, char.name, user.name)).join('\n') || '（暂无）',
+  ].join('\n');
+  const data = await safeFetchJson(
+    `${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
+      body: JSON.stringify({
+        model: apiConfig.model,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: request }],
+        stream: false,
+        temperature: Math.min(1, Math.max(0.2, apiConfig.temperature ?? 0.75)),
+      }),
+    },
+    0,
+    90_000,
+    { appId: 'social', appName: '朋友圈', charId: char.id, charName: char.name, purpose: '朋友圈生图提示词' },
+  );
+  const prompt = extractContent(data).trim();
+  if (!prompt) throw new Error('主聊天模型没有返回有效的朋友圈生图提示词');
+
+  return `${MOMENT_IMAGE_PROMPT_PREFIX}
+
+发布者：${char.name}
+角色人设：严格依照角色设定、记忆与当前生活，不混用其他角色资料
+当前状态：${input.currentState?.trim() || '符合角色此刻状态'}
+朋友圈正文：${input.content.trim()}
+图片类型：${input.imageType}
+场景要求：${input.scene?.trim() || prompt}
+氛围要求：${input.atmosphere?.trim() || '自然、松弛、真实的日常分享'}
+完整画面描述：${prompt}
+补充约束：只生成单张图片，符合朋友圈语境，生活化、自然真实，使用 ${ratio} 构图。`;
 }
 
 const dataUrlToBlob = async (value: string): Promise<Blob> => {
@@ -190,21 +321,29 @@ export async function generateCharacterPhotos(input: {
   char: CharacterProfile;
   messages: Message[];
   apiConfig: APIConfig;
+  /** 朋友圈强制传 count: 1；聊天未传时继续尊重设置里的张数。 */
+  count?: number;
+  surface?: 'chat' | 'moments';
 }): Promise<string[]> {
   const config = resolveImageGenConfig(input.apiConfig);
   if (!config.enabled) throw new Error('请先在设置里开启“生图 API”');
   if (!config.baseUrl || !config.apiKey || !config.model) throw new Error('生图 API 的 URL、Key 和模型还没有填完整');
 
   const refs = config.referenceMode === 'off' ? [] : collectReferences({ config, char: input.char, messages: input.messages });
+  const count = Math.max(1, Math.min(4, Math.round(input.count ?? config.count)));
   const commonMeta = {
-    appId: 'chat', appName: '聊天', charId: input.char.id, charName: input.char.name, purpose: '角色照片生成',
+    appId: input.surface === 'moments' ? 'social' : 'chat',
+    appName: input.surface === 'moments' ? '朋友圈' : '聊天',
+    charId: input.char.id,
+    charName: input.char.name,
+    purpose: input.surface === 'moments' ? '角色朋友圈图片生成' : '角色照片生成',
   } as const;
   let data: any;
   if (refs.length > 0) {
     const form = new FormData();
     form.append('model', config.model);
     form.append('prompt', `${input.prompt}\n身份一致性要求：严格保持参考图人物身份与五官；相似度优先级 ${Math.round(config.similarity * 100)}%。`);
-    form.append('n', String(config.count));
+    form.append('n', String(count));
     form.append('size', imageSizeForAspectRatio(config.size, config.aspectRatio));
     if (config.similarity >= 0.65) form.append('input_fidelity', 'high');
     for (let index = 0; index < refs.length; index += 1) {
@@ -227,7 +366,7 @@ export async function generateCharacterPhotos(input: {
         body: JSON.stringify({
           model: config.model,
           prompt: `${input.prompt}\n画幅比例：${config.aspectRatio}。`,
-          n: config.count,
+          n: count,
           size: imageSizeForAspectRatio(config.size, config.aspectRatio),
         }),
       },
