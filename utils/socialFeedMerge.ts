@@ -1,5 +1,10 @@
 import type { SocialComment, SocialPost } from '../types';
 
+export interface SocialCommentThread {
+    comment: SocialComment;
+    replies: SocialCommentThread[];
+}
+
 /**
  * Prepend a generated batch without replacing anything that arrived while the
  * request was in flight. IDs are unique in normal use; the guard also makes a
@@ -34,4 +39,21 @@ export function mergeSocialComments(current: SocialComment[], incoming: SocialCo
     const existingIds = new Set(current.map(comment => comment.id));
     const fresh = incoming.filter(comment => !existingIds.has(comment.id));
     return fresh.length > 0 ? [...current, ...fresh] : current;
+}
+
+/** Keep reply chains visually attached to the comment they answer. */
+export function buildSocialCommentThreads(comments: SocialComment[]): SocialCommentThread[] {
+    const nodes = new Map<string, SocialCommentThread>();
+    comments.forEach(comment => nodes.set(comment.id, { comment, replies: [] }));
+
+    const roots: SocialCommentThread[] = [];
+    comments.forEach(comment => {
+        const node = nodes.get(comment.id)!;
+        const parent = comment.replyToCommentId && comment.replyToCommentId !== comment.id
+            ? nodes.get(comment.replyToCommentId)
+            : undefined;
+        if (parent) parent.replies.push(node);
+        else roots.push(node);
+    });
+    return roots;
 }
