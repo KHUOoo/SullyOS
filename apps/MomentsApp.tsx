@@ -24,7 +24,7 @@ import { loadCharacterContextMessages } from '../utils/chatContextRange';
 import { processImageToBlob } from '../utils/file';
 import { isImageValue, migrateDataUrlToRef, putImageBlob } from '../utils/blobRef';
 import { extractContent, safeResponseJson } from '../utils/safeApi';
-import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
+import { buildSocialCommentThreads, mergeSocialComments, prependUniqueSocialPosts, updateSocialPost, type SocialCommentThread } from '../utils/socialFeedMerge';
 import { buildMomentTranslationMessages, shouldOfferMomentTranslation } from '../utils/momentTranslation';
 import { trackEvent } from '../utils/analytics';
 import {
@@ -116,11 +116,20 @@ const ImageGrid: React.FC<{
 }> = ({ images, background, onPreview }) => {
     const pictures = images.filter(isImageValue).slice(0, 9);
     if (pictures.length > 0) {
-        const gridClass = pictures.length === 1
-            ? 'grid-cols-1 max-w-[72%]'
-            : pictures.length === 2 || pictures.length === 4
-                ? 'grid-cols-2 max-w-[78%]'
-                : 'grid-cols-3 max-w-[86%]';
+        if (pictures.length === 1) {
+            return (
+                <button
+                    type="button"
+                    onClick={() => onPreview?.(pictures[0])}
+                    className="mt-2 inline-flex max-w-[86%] items-center justify-center overflow-hidden bg-slate-100"
+                >
+                    <TokenImg value={pictures[0]} alt="朋友圈图片 1" className="block max-h-[420px] max-w-full object-contain" />
+                </button>
+            );
+        }
+        const gridClass = pictures.length === 2 || pictures.length === 4
+            ? 'grid-cols-2 max-w-[78%]'
+            : 'grid-cols-3 max-w-[86%]';
         return (
             <div className={`mt-2 grid gap-1 ${gridClass}`}>
                 {pictures.map((image, index) => (
@@ -128,9 +137,9 @@ const ImageGrid: React.FC<{
                         key={`${image}-${index}`}
                         type="button"
                         onClick={() => onPreview?.(image)}
-                        className={`${pictures.length === 1 ? 'aspect-[4/3]' : 'aspect-square'} overflow-hidden bg-slate-100`}
+                        className="aspect-square overflow-hidden bg-slate-100"
                     >
-                        <TokenImg value={image} alt={`朋友圈图片 ${index + 1}`} className="h-full w-full object-cover" />
+                        <TokenImg value={image} alt={`朋友圈图片 ${index + 1}`} className="h-full w-full object-contain" />
                     </button>
                 ))}
             </div>
@@ -171,6 +180,7 @@ const MomentsApp: React.FC = () => {
     const [actionPostId, setActionPostId] = useState<string | null>(null);
     const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
     const [commentInput, setCommentInput] = useState('');
+    const [replyTarget, setReplyTarget] = useState<SocialComment | null>(null);
     const [isReplying, setIsReplying] = useState(false);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
     const [translationStates, setTranslationStates] = useState<Record<string, { expanded: boolean; loading: boolean }>>({});
@@ -709,25 +719,36 @@ scene 与 atmosphere 只描述符合正文的日常画面，不要写海报、�
         trackEvent('点赞一条帖子', { action: post.isLiked ? 'unlike' : 'like' });
     };
 
-    const generateReplyToUser = async (post: SocialPost, userComment: string) => {
+    const generateReplyToUser = async (post: SocialPost, userComment: SocialComment, targetComment?: SocialComment | null) => {
         if (!apiConfig.apiKey || characters.length === 0 || isReplying) return;
         setIsReplying(true);
         try {
+            const targetedCharacter = targetComment?.authorCharId
+                ? characters.find(character => character.id === targetComment.authorCharId)
+                : undefined;
             const authorCharacter = post.authorCharId
                 ? characters.find(character => character.id === post.authorCharId)
                 : undefined;
-            const participants = authorCharacter
+            const participants = targetedCharacter
+                ? [targetedCharacter]
+                : authorCharacter
                 ? [authorCharacter]
                 : shuffle(characters).slice(0, Math.min(3, characters.length));
             const context = await buildGenerationContext(participants);
+            const targetDescription = targetComment
+                ? `用户正在回复角色 ${JSON.stringify(targetComment.authorName)} 的这条评论：${JSON.stringify(targetComment.content)}`
+                : '用户正在直接评论这条朋友圈。';
             const prompt = `### 任务：回复用户在朋友圈里的评论
 帖子作者：${JSON.stringify(post.authorName)}
 帖子正文：${JSON.stringify(post.content || '(无正文)')}
 已有评论：
 ${buildSparkCommentHistory(post)}
-用户 ${JSON.stringify(socialProfile.name)} 的新评论：${JSON.stringify(userComment)}
+${targetDescription}
+用户 ${JSON.stringify(socialProfile.name)} 的新回复：${JSON.stringify(userComment.content)}
 
-请由帖子作者或本次允许发言的角色自然回复 1-2 条。只输出 JSON 数组：
+${targetedCharacter
+                    ? `只由被回复的角色 ${JSON.stringify(targetComment?.authorName)} 自然回复 1 条。`
+                    : '请由帖子作者或本次允许发言的角色自然回复 1-2 条。'}只输出 JSON 数组：
 [{"author":"角色账号名","charId":"角色ID","content":"回复内容"}]`;
             const json = await runWithController(controller => requestChatJson(context, prompt, '回复用户评论', controller));
             const replies: SocialComment[] = json.flatMap(item => {
@@ -743,11 +764,13 @@ ${buildSparkCommentHistory(post)}
                     id: `moment-reply-${Date.now()}-${Math.random()}`,
                     authorName: author.name,
                     authorAvatar: author.character.avatar,
-                    content: `回复 ${socialProfile.name}：${item.content.trim()}`,
+                    content: item.content.trim(),
                     likes: 0,
                     isCharacter: true,
                     authorType: 'character' as const,
                     authorCharId: author.character.id,
+                    replyToCommentId: userComment.id,
+                    replyToName: socialProfile.name,
                 }];
             });
             if (replies.length > 0) {
@@ -773,13 +796,17 @@ ${buildSparkCommentHistory(post)}
             content,
             likes: 0,
             authorType: 'user',
+            replyToCommentId: replyTarget?.id,
+            replyToName: replyTarget?.authorName,
         };
         const updated = updatePost(selectedPost.id, current => ({
             ...current,
             comments: mergeSocialComments(current.comments || [], [comment]),
         }));
         setCommentInput('');
-        if (updated) await generateReplyToUser(updated, content);
+        const target = replyTarget;
+        setReplyTarget(null);
+        if (updated) await generateReplyToUser(updated, comment, target);
     };
 
     const clearFeed = async () => {
@@ -788,6 +815,7 @@ ${buildSparkCommentHistory(post)}
         feedRef.current = [];
         setFeed([]);
         setSelectedPostId(null);
+        setReplyTarget(null);
         await DB.clearSocialPosts();
         setSettingsOpen(false);
         trackEvent('清空 Spark 推荐流');
@@ -806,6 +834,45 @@ ${buildSparkCommentHistory(post)}
 
     const renderComments = (post: SocialPost) => {
         if (post.comments.length === 0 && !respondingPostIds.has(post.id) && !post.isLiked) return null;
+        const openReply = (comment: SocialComment) => {
+            setSelectedPostId(post.id);
+            setReplyTarget(comment);
+            setCommentInput('');
+            setActionPostId(null);
+        };
+        const renderThread = (thread: SocialCommentThread, depth = 0): React.ReactNode => {
+            const { comment, replies } = thread;
+            const canReply = post.authorType === 'user' && comment.authorType === 'character';
+            const line = (
+                <>
+                    <span className="font-semibold text-[#53688f]">{comment.authorName}</span>
+                    {comment.replyToName && (
+                        <>
+                            <span> 回复 </span>
+                            <span className="font-semibold text-[#53688f]">{comment.replyToName}</span>
+                        </>
+                    )}
+                    <span>：{comment.content}</span>
+                </>
+            );
+            return (
+                <div key={comment.id} className={depth > 0 ? 'ml-3 border-l border-[#dddde1] pl-2' : ''}>
+                    {canReply ? (
+                        <button
+                            type="button"
+                            onClick={() => openReply(comment)}
+                            className="relative block w-full py-[1px] text-left active:bg-black/5"
+                            aria-label={`回复 ${comment.authorName}`}
+                        >
+                            {line}
+                        </button>
+                    ) : (
+                        <div className="relative py-[1px]">{line}</div>
+                    )}
+                    {replies.map(reply => renderThread(reply, depth + 1))}
+                </div>
+            );
+        };
         return (
             <div className="relative mt-2 rounded-sm bg-[#f3f3f5] px-2.5 py-1.5 text-[12px] leading-[1.55] text-[#333]">
                 <span className="absolute -top-1.5 left-3 h-3 w-3 rotate-45 bg-[#f3f3f5]" />
@@ -815,12 +882,7 @@ ${buildSparkCommentHistory(post)}
                         <span>{socialProfile.name}</span>
                     </div>
                 )}
-                {post.comments.map(comment => (
-                    <div key={comment.id} className="relative py-[1px]">
-                        <span className="font-semibold text-[#53688f]">{comment.authorName}</span>
-                        <span>：{comment.content}</span>
-                    </div>
-                ))}
+                {buildSocialCommentThreads(post.comments).map(thread => renderThread(thread))}
                 {respondingPostIds.has(post.id) && (
                     <div className="relative py-1 text-[#8b8b8b]">角色正在回应…</div>
                 )}
@@ -868,7 +930,7 @@ ${buildSparkCommentHistory(post)}
                 </div>
             </header>
 
-            <main className="flex-1 overflow-y-auto overscroll-contain pb-[max(22px,var(--safe-bottom))]">
+            <main className="no-scrollbar flex-1 overflow-y-auto overscroll-contain pb-[max(22px,var(--safe-bottom))]">
                 <section className="relative h-[252px] bg-[#3b4551]">
                     <button type="button" onClick={() => coverInputRef.current?.click()} className="absolute inset-0 block h-full w-full overflow-hidden text-left">
                         {coverImage && isImageValue(coverImage) ? (
@@ -959,7 +1021,7 @@ ${buildSparkCommentHistory(post)}
                                                 <button type="button" onClick={() => toggleLike(post)} className="flex items-center gap-1 border-r border-white/10 px-4">
                                                     <Heart size={16} weight={post.isLiked ? 'fill' : 'regular'} />{post.isLiked ? '取消' : '赞'}
                                                 </button>
-                                                <button type="button" onClick={() => { setSelectedPostId(post.id); setActionPostId(null); }} className="flex items-center gap-1 px-4">
+                                                <button type="button" onClick={() => { setSelectedPostId(post.id); setReplyTarget(null); setCommentInput(''); setActionPostId(null); }} className="flex items-center gap-1 px-4">
                                                     <ChatCircle size={16} />评论
                                                 </button>
                                             </div>
@@ -1024,18 +1086,18 @@ ${buildSparkCommentHistory(post)}
 
             {selectedPost && (
                 <div className="absolute inset-0 z-[65] flex flex-col bg-white/95 backdrop-blur-sm">
-                    <button type="button" onClick={() => setSelectedPostId(null)} className="flex-1" aria-label="关闭评论" />
+                    <button type="button" onClick={() => { setSelectedPostId(null); setReplyTarget(null); }} className="flex-1" aria-label="关闭评论" />
                     <div className="rounded-t-2xl border-t border-[#e7e7e7] bg-white px-4 pb-[max(14px,var(--safe-bottom))] pt-4 shadow-[0_-8px_30px_rgba(0,0,0,.12)]">
                         <div className="mb-3 flex items-center justify-between">
-                            <span className="text-sm font-semibold">评论 {selectedPost.authorName}</span>
-                            <button type="button" onClick={() => setSelectedPostId(null)} className="grid h-7 w-7 place-items-center rounded-full bg-[#f2f2f2]"><X size={16} /></button>
+                            <span className="text-sm font-semibold">{replyTarget ? `回复 ${replyTarget.authorName}` : `评论 ${selectedPost.authorName}`}</span>
+                            <button type="button" onClick={() => { setSelectedPostId(null); setReplyTarget(null); }} className="grid h-7 w-7 place-items-center rounded-full bg-[#f2f2f2]"><X size={16} /></button>
                         </div>
                         <div className="flex items-end gap-2">
                             <textarea
                                 autoFocus
                                 value={commentInput}
                                 onChange={event => setCommentInput(event.target.value)}
-                                placeholder="评论…"
+                                placeholder={replyTarget ? `回复 ${replyTarget.authorName}…` : '评论…'}
                                 rows={2}
                                 className="min-h-11 flex-1 resize-none rounded-lg bg-[#f2f3f5] px-3 py-2 text-[14px] outline-none"
                             />
