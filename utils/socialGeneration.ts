@@ -5,6 +5,31 @@ import { formatMessageForPrompt } from './messageFormat';
 type Handles = Record<string, SubAccount[]>;
 const normalizeName = (name: string) => name.normalize('NFKC').trim().toLowerCase();
 
+export type CharacterMomentFocus = 'personal_life' | 'user_related';
+
+/**
+ * Give every refresh an explicit 60/40 content brief instead of asking the LLM
+ * to improvise the ratio.  Rounding keeps small batches useful while a normal
+ * five-post refresh is always exactly three personal-life posts and two posts
+ * that may involve the user.
+ */
+export function buildCharacterMomentFocusPlan(
+    count: number,
+    random: () => number = Math.random,
+): CharacterMomentFocus[] {
+    const safeCount = Math.max(0, Math.floor(count));
+    const userRelatedCount = Math.round(safeCount * 0.4);
+    const plan: CharacterMomentFocus[] = [
+        ...Array.from({ length: safeCount - userRelatedCount }, () => 'personal_life' as const),
+        ...Array.from({ length: userRelatedCount }, () => 'user_related' as const),
+    ];
+    for (let index = plan.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(random() * (index + 1));
+        [plan[index], plan[swapIndex]] = [plan[swapIndex], plan[index]];
+    }
+    return plan;
+}
+
 export function getSparkHandles(char: CharacterProfile, handles: Handles): SubAccount[] {
     const configured = (handles[char.id] || []).filter(h => h.handle.trim());
     return configured.length ? configured : [{ id: 'default', handle: char.socialProfile?.handle || char.name, note: '主账号' }];
@@ -14,6 +39,7 @@ export function getSparkHandles(char: CharacterProfile, handles: Handles): SubAc
 export function buildSparkGenerationContext(
     participants: CharacterProfile[], user: UserProfile, social: SocialAppProfile, handles: Handles,
     recentMessages: Record<string, Message[]> = {},
+    mode: 'interaction' | 'character_feed' = 'interaction',
 ): string {
     const profiles = participants.map(char => {
         const recent = (recentMessages[char.id] || []).slice(-6);
@@ -26,14 +52,18 @@ export function buildSparkGenerationContext(
 可用账号: ${JSON.stringify(getSparkHandles(char, handles).map(h => ({ authorName: h.handle, note: h.note })))}
 本档案中的“你/我”、设定、记忆和说话方式只属于 ${char.name}，不得套到其他角色身上。
 ${core}
-近期私聊片段（只用于该角色理解关系，不得在公开评论泄露）:
+近期私聊片段（${mode === 'character_feed'
+            ? '只允许用于少量 user_related 动态理解关系；personal_life 动态不得围绕这些片段展开，更不得照搬成隔空私聊'
+            : '只用于该角色理解关系，不得在公开评论泄露'}）:
 ${recent.map(m => formatMessageForPrompt(m, char.name, user.name).slice(0, 800)).join('\n') || '(无近期片段，不编造共同经历)'}
 <<< 角色档案结束 charId=${JSON.stringify(char.id)} >>>`;
     }).join('\n\n');
     return `你负责模拟 Spark 社区。下面是互相独立的角色资料，不是让你同时成为所有角色。
 每条发言只能属于一个作者。角色必须只使用自己档案中的人设、口吻、记忆和账号，禁止混用其他角色的资料。
 charId 必须从档案原样复制，authorName/author 必须是同一 charId 下的账号。路人使用新网名，charId 为 null，不得冒用角色账号。
-用户始终是互动对象，禁止代替用户发帖或评论。资料不足时不要编造用户的姓名、设定或共同经历。
+${mode === 'character_feed'
+        ? '角色拥有不围绕用户运转的独立生活。生成角色自己的朋友圈时，以角色的日常、兴趣、工作、环境和情绪为主；用户只是可能相关的人之一，不是每条动态的默认收件人。'
+        : '用户是本次互动对象，禁止代替用户发帖或评论。'}资料不足时不要编造用户的姓名、设定或共同经历。
 公开发言遵守信息边界，不能泄露私聊原文或其他角色的私密信息。
 【用户身份对应】
 现实/角色互动姓名: ${JSON.stringify(user.name)}
