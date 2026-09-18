@@ -284,6 +284,14 @@ export interface ImageGenApiConfig {
   similarity: number;
   /** 把最近聊天里的图片也作为参考图发送到 edits。 */
   useRecentChatImages?: boolean;
+  /** 普通聊天中角色附图使用的可编辑前置提示词。 */
+  chatPromptPrefix?: string;
+  /** 普通聊天图片的反向提示词；会作为负面约束拼入最终提示词。 */
+  chatNegativePrompt?: string;
+  /** 朋友圈配图使用的可编辑前置提示词。 */
+  momentPromptPrefix?: string;
+  /** 朋友圈图片的反向提示词；会作为负面约束拼入最终提示词。 */
+  momentNegativePrompt?: string;
 }
 
 export interface APIConfig {

@@ -44,6 +44,10 @@ export function normalizeApiConfig(config: APIConfig): APIConfig {
         similarity: Math.max(0, Math.min(1, Number(imageGenApi.similarity) || 0)),
         referenceImage: String(imageGenApi.referenceImage || '').trim(),
         useRecentChatImages: imageGenApi.useRecentChatImages === true,
+        chatPromptPrefix: String(imageGenApi.chatPromptPrefix || '').trim(),
+        chatNegativePrompt: String(imageGenApi.chatNegativePrompt || '').trim(),
+        momentPromptPrefix: String(imageGenApi.momentPromptPrefix || '').trim(),
+        momentNegativePrompt: String(imageGenApi.momentNegativePrompt || '').trim(),
       },
     } : {}),
   };
