@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CHAT_IMAGE_PROMPT_PREFIX,
+  CHAT_IMAGE_NEGATIVE_PROMPT,
   MOMENT_IMAGE_PROMPT_PREFIX,
+  buildContextualChatPhotoPrompt,
   generateCharacterPhotos,
   imageSizeForAspectRatio,
   isCharacterPhotoRequestText,
   normalizeMomentPhotoType,
+  parseContextualChatImagePlan,
   resolveImageGenConfig,
   shouldGenerateMomentImage,
 } from './imageGenApi';
@@ -43,6 +46,42 @@ describe('imageGenApi', () => {
     expect(MOMENT_IMAGE_PROMPT_PREFIX).toContain('朋友圈');
     expect(MOMENT_IMAGE_PROMPT_PREFIX).toContain('手机随手拍');
     expect(CHAT_IMAGE_PROMPT_PREFIX).not.toBe(MOMENT_IMAGE_PROMPT_PREFIX);
+    expect(CHAT_IMAGE_NEGATIVE_PROMPT).toContain('不要');
+  });
+
+  it('parses autonomous chat image decisions conservatively', () => {
+    expect(parseContextualChatImagePlan('```json\n{"sendImage":true,"mode":"selfie","scene":"窗边随手拍的自拍"}\n```'))
+      .toEqual({ sendImage: true, mode: 'selfie', scene: '窗边随手拍的自拍' });
+    expect(parseContextualChatImagePlan('{"sendImage":true,"mode":"unknown","scene":""}').sendImage).toBe(false);
+    expect(parseContextualChatImagePlan('普通回复').sendImage).toBe(false);
+  });
+
+  it('uses independently configured chat prefix and negative prompt', () => {
+    const prompt = buildContextualChatPhotoPrompt({
+      char: { id: 'char-1', name: '角色' } as any,
+      user: { name: '用户' } as any,
+      messages: [
+        { id: 1, role: 'user', type: 'text', content: '给我看看窗外', timestamp: 1 },
+        { id: 2, role: 'assistant', type: 'text', content: '好，拍给你看。', timestamp: 2 },
+      ] as any,
+      plan: { sendImage: true, mode: 'pov', scene: '雨夜窗外的街灯' },
+      apiConfig: {
+        baseUrl: 'https://chat.example/v1', apiKey: 'chat-key', model: 'chat-model',
+        imageGenApi: {
+          enabled: true, baseUrl: 'https://image.example/v1', apiKey: 'image-key', model: 'image-model',
+          size: 'auto', aspectRatio: '4:5', count: 1, timeoutMs: 120000,
+          referenceMode: 'off', similarity: 0.8,
+          chatPromptPrefix: 'CHAT CUSTOM PREFIX',
+          chatNegativePrompt: 'CHAT CUSTOM NEGATIVE',
+          momentPromptPrefix: 'MOMENT CUSTOM PREFIX',
+          momentNegativePrompt: 'MOMENT CUSTOM NEGATIVE',
+        },
+      },
+    });
+    expect(prompt).toContain('CHAT CUSTOM PREFIX');
+    expect(prompt).toContain('CHAT CUSTOM NEGATIVE');
+    expect(prompt).not.toContain('MOMENT CUSTOM PREFIX');
+    expect(prompt).toContain('雨夜窗外的街灯');
   });
 
   it('uses a 30 percent boundary and constrains Moments photo types', () => {
