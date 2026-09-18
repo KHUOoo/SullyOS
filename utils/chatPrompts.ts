@@ -7,7 +7,7 @@ import { ContextBuilder } from './context';
 import { DB } from './db';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
 import { formatQixiEventCardForContext, tryParseQixiEventChatCard } from './qixiChatCard';
-import { normalizeMessageContent, stickerNameFromUrl, theaterWhenPhrase } from './messageFormat';
+import { getVoiceTranscript, normalizeMessageContent, stickerNameFromUrl, theaterWhenPhrase } from './messageFormat';
 import { formatTransferRecord } from './transferFormat';
 import { computeCurrentListening, getCurrentSlot } from './charMusicSchedule';
 import { getCharLyricSnippet } from './charLyricCache';
@@ -1382,6 +1382,12 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                         content = `${timeStr} [麦当劳工具结果: ${meta.mcdToolName}]`;
                     }
                 }
+                else if (m.type === 'voice') {
+                     const transcript = getVoiceTranscript(m);
+                     content = transcript
+                         ? `${timeStr} [${m.role === 'user' ? '用户' : '你'} 发送了一条语音，转写内容：${transcript}]`
+                         : `${timeStr} [${m.role === 'user' ? '用户' : '你'} 发送了一条无法转写的语音]`;
+                }
                 else if (m.type === 'emoji') {
                      const stickerName = stickerNameFromUrl(emojis, m.content);
                      content = `${timeStr} [${m.role === 'user' ? '用户' : '你'} 发送了表情包: ${stickerName}]`;
@@ -1391,7 +1397,7 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                         const fwd = JSON.parse(m.content);
                         const lines = (fwd.messages || []).map((fm: any) => {
                             const sender = fm.role === 'user' ? (fwd.fromUserName || '用户') : (fwd.fromCharName || '角色');
-                            const text = fm.type === 'image' ? '[图片]' : fm.type === 'emoji' ? '[表情]' : (fm.content || '').slice(0, 200);
+                            const text = fm.type === 'image' ? '[图片]' : fm.type === 'emoji' ? '[表情]' : fm.type === 'voice' ? `[语音] ${fm.metadata?.transcript || ''}`.trim() : (fm.content || '').slice(0, 200);
                             return `  ${sender}: ${text}`;
                         });
                         content = `${timeStr} [用户转发了与 ${fwd.fromCharName || '另一个角色'} 的 ${fwd.count || lines.length} 条聊天记录]\n${lines.join('\n')}`;
