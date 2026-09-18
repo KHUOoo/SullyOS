@@ -61,8 +61,12 @@ export function isImageValue(value: unknown): value is string {
 }
 
 /** 把 Blob 存进 blob_assets，返回 `blobref:<id>` 令牌（新 id 由 SDK 生成，`b_` 前缀）。 */
-export async function putImageBlob(blob: Blob): Promise<string> {
+export async function putBlobRef(blob: Blob): Promise<string> {
     return blobStore.put(blob);
+}
+
+export async function putImageBlob(blob: Blob): Promise<string> {
+    return putBlobRef(blob);
 }
 
 /** 读取令牌对应的 Blob（非令牌或不存在返回 null）。 */
