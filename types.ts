@@ -604,6 +604,11 @@ export interface ApiPreset {
   config: APIConfig;
 }
 
+/** 普通一对一聊天主文字回复的会话级选择；凭据始终从 AI 设置实时解析。 */
+export type ChatModelOverride =
+  | { type: 'preset'; presetId: string }
+  | { type: 'model'; model: string };
+
 export interface CharacterBuff {
   id: string;
   name: string;      // internal key, e.g. 'reconciliation_fragile'
@@ -2948,6 +2953,8 @@ export interface CharacterProfile {
   chatAppearance?: Partial<OSTheme>;
   chatDecorationCssIsolated?: boolean;
   chatBackground?: string;
+  /** 普通聊天主文字回复的会话级选择；不复制 URL / Key，失效时跟随全局默认聊天 API。 */
+  chatModelOverride?: ChatModelOverride;
   contextLimit?: number;
   /**
    * AI 原文读取范围策略：
