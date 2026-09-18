@@ -22,6 +22,7 @@ import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 import { resolveCharTimeZone } from '../../utils/timezone';
 import { getCurrentScheduleSlotIndex, getScheduleWallClock } from '../../utils/scheduleTime';
+import { markNextChatEntryAsList } from '../../utils/chatEntry';
 
 // ===== 电子宠物主题（tamagotchi skin）=====
 // 桌面不再是「放图标的手机」，而是一台华丽丽的二次元养成机：屏幕主体是角色
@@ -1013,7 +1014,7 @@ const TamagotchiHome: React.FC = () => {
     const charUnread = char ? (unreadMessages[char.id] || 0) : 0;
 
     const openRoom = useCallback(() => openApp(AppID.Room), [openApp]);
-    const openChat = useCallback(() => openApp(AppID.Chat), [openApp]);
+    const openChat = useCallback(() => { markNextChatEntryAsList(); openApp(AppID.Chat); }, [openApp]);
     // 世界化入口：带意图打开小屋 App（RoomApp 挂载时消费，落到对应分区 / 开梦境）
     const openHomeland = useCallback(() => { roomLaunch.request({ tab: 'worldHome' }); openApp(AppID.Room); }, [openApp]);
     const openKanata = useCallback(() => openApp(AppID.VRWorld), [openApp]);
