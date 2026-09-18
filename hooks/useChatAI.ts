@@ -1,6 +1,6 @@
 
 import { useState, useRef, useEffect, useSyncExternalStore, MutableRefObject } from 'react';
-import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProfile, RealtimeConfig, CharacterBuff, Amsg2ExpiredNoticeRecord } from '../types';
+import { APIConfig, CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProfile, RealtimeConfig, CharacterBuff, Amsg2ExpiredNoticeRecord } from '../types';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
 import { safeFetchJson, safeResponseJson } from '../utils/safeApi';
@@ -450,6 +450,8 @@ interface UseChatAIProps {
     char: CharacterProfile | undefined;
     userProfile: UserProfile;
     apiConfig: any;
+    /** 仅覆盖普通聊天主文字回复；情绪、记忆、生图等仍读取各自原配置。 */
+    replyApiConfig?: APIConfig;
     groups: GroupProfile[];
     emojis: Emoji[];
     categories: EmojiCategory[];
@@ -477,6 +479,7 @@ export const useChatAI = ({
     char,
     userProfile,
     apiConfig,
+    replyApiConfig,
     groups,
     emojis,
     categories,
@@ -740,7 +743,7 @@ export const useChatAI = ({
         // 早退路径也要熄「发送准备中」灯: caller (Chat.tsx) 是先 setInstantSendingActive(true)
         // 再调 triggerAI 的, 这里 return 掉而不通知的话指示灯会永远亮着。
         if (isTyping || !char) { onInstantPosted?.(); return; }
-        const effectiveApi = overrideApiConfig || apiConfig;
+        const effectiveApi = overrideApiConfig || replyApiConfig || apiConfig;
         if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); onInstantPosted?.(); return; }
 
         // 重 roll（回溯重生）时不带入上一轮的情绪余波：清掉 buff 注入（buffInjection/activeBuffs）和

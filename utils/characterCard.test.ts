@@ -36,6 +36,7 @@ describe('stripSensitiveCardFields', () => {
       chromeCustomCss: '.x{}',
       embeddedTheme: { id: 't1' },
       chatBackground: 'bg',
+      chatModelOverride: { type: 'preset', presetId: 'local-only' },
       // 语言
       chatVoiceLang: 'ja',
       dateVoiceLang: 'en',
@@ -58,7 +59,7 @@ describe('stripSensitiveCardFields', () => {
     expect(out.sprites).toEqual({ happy: 'data:img' });
 
     // 全部被剥离
-    for (const key of ['bubbleStyle', 'chatFineTune', 'chromeCustomCss', 'embeddedTheme', 'chatBackground',
+    for (const key of ['bubbleStyle', 'chatFineTune', 'chromeCustomCss', 'embeddedTheme', 'chatBackground', 'chatModelOverride',
       'chatVoiceLang', 'dateVoiceLang', 'activeBuffs', 'buffInjection', 'phoneState', 'savedDateState',
       'videoCallPerformancePersona', 'videoCallPerformancePersonaGeneratedAt', 'companionTouchSettings']) {
       expect(out).not.toHaveProperty(key);
@@ -77,7 +78,7 @@ describe('stripSensitiveCardFields', () => {
   });
 
   it('清单覆盖四类敏感字段', () => {
-    for (const k of ['emotionConfig', 'embeddingConfig', 'bubbleStyle', 'chatVoiceLang', 'memoryPalaceWaterline', 'activeBuffs', 'phoneState']) {
+    for (const k of ['emotionConfig', 'embeddingConfig', 'bubbleStyle', 'chatModelOverride', 'chatVoiceLang', 'memoryPalaceWaterline', 'activeBuffs', 'phoneState']) {
       expect(CARD_STRIPPED_FIELDS).toContain(k);
     }
   });

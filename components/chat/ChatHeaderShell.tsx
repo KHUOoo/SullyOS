@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CaretLeft, Lightning, Stop } from '@phosphor-icons/react';
+import { CaretDown, CaretLeft, Lightning, Stop } from '@phosphor-icons/react';
 import { CharacterBuff, CharacterProfile } from '../../types';
 import TokenImg from '../os/TokenImg';
 
@@ -26,6 +26,8 @@ interface ChatHeaderShellProps {
     statusText?: string;
     /** 可选的附加操作，群聊用来放置“记忆规则”帮助入口。 */
     extraAction?: { label: string; icon: React.ReactNode; onClick: () => void };
+    /** 普通私聊当前主回复模型；点击打开会话级快速切换。 */
+    modelAction?: { label: string; onClick: () => void };
     /** 触发按钮图标：生成中想显示"停止"时传 'stop'。不传 = 原行为（闪电） */
     triggerIcon?: 'lightning' | 'stop';
     /** 私聊启用底部生成入口时隐藏顶栏闪电。 */
@@ -85,6 +87,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     onDeleteBuff,
     statusText,
     extraAction,
+    modelAction,
     triggerIcon = 'lightning',
     hideTrigger = false,
     hideBuffs = false,
@@ -273,6 +276,27 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
         ? <Stop className="w-5 h-5" weight="fill" />
         : <Lightning className="w-5 h-5" weight="bold" />;
 
+    const modelChip = modelAction ? (
+        <button
+            type="button"
+            onClick={(event) => { event.stopPropagation(); modelAction.onClick(); }}
+            className={`sully-chat-model flex min-w-0 max-w-[9.5rem] items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-none transition-colors ${
+                isDarkHeader
+                    ? 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                    : isPixelHeader
+                      ? 'border-[#8f674a]/25 bg-[#fff7ed] text-[#8f674a]'
+                      : acnh
+                        ? 'border-[#e6dab4] bg-[#fbf4de] text-[#6b5a3e]'
+                        : 'border-slate-200 bg-white/70 text-slate-500 hover:bg-white'
+            }`}
+            title={`当前模型：${modelAction.label}`}
+            aria-label={`切换聊天模型，当前为 ${modelAction.label}`}
+        >
+            <span className="truncate">{modelAction.label}</span>
+            <CaretDown className="h-2.5 w-2.5 shrink-0" weight="bold" />
+        </button>
+    ) : null;
+
     const renderBuffRow = (centered: boolean) => {
         if (buffs.length === 0) return null;
         return (
@@ -360,6 +384,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
             <div className={`sully-chat-name mt-1 font-bold ${primaryTextClass}`}>{activeCharacter.name}</div>
             <div className="sully-chat-status flex items-center justify-center gap-2 flex-wrap">
                 {onlineStatusNode}
+                {modelChip}
             </div>
             {buffs.length > 0 && (
                 <div className="mt-1 min-h-[18px] w-full">
@@ -376,6 +401,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                 <div className={`sully-chat-name font-bold ${primaryTextClass}`}>{activeCharacter.name}</div>
                 <div className="sully-chat-status flex items-center gap-2 flex-wrap">
                     {onlineStatusNode}
+                    {modelChip}
                     {lastTokenUsage && (
                         <div className={`sully-chat-token text-[9px] px-1.5 py-0.5 rounded-md font-mono border ${isDarkHeader ? 'bg-slate-800 text-slate-300 border-white/10' : isPixelHeader ? 'bg-[#fff7ed] text-[#8f674a] border-[#8f674a]/20' : 'bg-slate-100 text-slate-400 border-slate-200'}`} title={tokenBreakdown ? `prompt: ${tokenBreakdown.prompt} | completion: ${tokenBreakdown.completion} | msgs: ${tokenBreakdown.msgCount} | pass: ${tokenBreakdown.pass}` : ''}>
                             {lastTokenUsage}

@@ -35,6 +35,7 @@ import LuckinHelpModal from '../components/luckin/LuckinHelpModal';
 import { PRESET_THEMES, DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
 import { resolveChatTheme } from '../utils/groupChat/theme';
 import ChatHeader from '../components/chat/ChatHeaderShell';
+import ChatModelSwitcher from '../components/chat/ChatModelSwitcher';
 import CharacterEntryTransition from '../components/chat/CharacterEntryTransition';
 import {resolveDecorationTheme} from '../utils/chatDecoration';
 import ChatDecorationAnnouncement from '../components/chat/ChatDecorationAnnouncement';
@@ -112,6 +113,13 @@ import {
 import type { CollaborationTransferMessage } from '../features/collaboration/types';
 import type { CollaborationInstallableArtifact } from '../features/collaboration/types';
 import {
+    buildChatModelChoices,
+    getActiveChatModelChoiceId,
+    getChatModelDisplayName,
+    resolveChatReplyApi,
+    type ChatModelChoice,
+} from '../utils/chatModelSelection';
+import {
     installableToCharacterPatch,
     installableToChatTheme,
     installableToThemePatch,
@@ -182,6 +190,7 @@ const Chat: React.FC = () => {
     const [characterPhotoOpen, setCharacterPhotoOpen] = useState(false);
     const [characterPhotoBusy, setCharacterPhotoBusy] = useState(false);
     const [characterPhotoInitialNote, setCharacterPhotoInitialNote] = useState('');
+    const [chatModelSwitcherOpen, setChatModelSwitcherOpen] = useState(false);
     const contextualImageProcessingRef = useRef(new Set<number>());
     
     // Emoji State
@@ -307,6 +316,34 @@ const Chat: React.FC = () => {
     const [showingTargetIds, setShowingTargetIds] = useState<Set<number>>(new Set());
 
     const char = characters.find(c => c.id === activeCharacterId) || characters[0];
+    const chatReplyApiConfig = useMemo(
+        () => resolveChatReplyApi(apiConfig, apiPresets, char?.chatModelOverride),
+        [apiConfig, apiPresets, char?.chatModelOverride],
+    );
+    const chatModelLabel = useMemo(
+        () => getChatModelDisplayName(apiConfig, apiPresets, char?.chatModelOverride),
+        [apiConfig, apiPresets, char?.chatModelOverride],
+    );
+    const chatModelChoices = useMemo(
+        () => buildChatModelChoices(apiConfig, apiPresets, availableModels),
+        [apiConfig, apiPresets, availableModels],
+    );
+    const activeChatModelChoiceId = useMemo(
+        () => getActiveChatModelChoiceId(apiConfig, apiPresets, char?.chatModelOverride),
+        [apiConfig, apiPresets, char?.chatModelOverride],
+    );
+    useEffect(() => setChatModelSwitcherOpen(false), [activeCharacterId]);
+
+    const handleChatModelSelect = useCallback((choice: ChatModelChoice) => {
+        if (!char) return;
+        if (!choice.configured) {
+            addToast('这个聊天模型还没配置完整，请先到 AI 设置补齐 URL、Key 和模型名称', 'info');
+            return;
+        }
+        updateCharacter(char.id, { chatModelOverride: choice.override || undefined });
+        setChatModelSwitcherOpen(false);
+        addToast(choice.isDefault ? '本会话已改为跟随默认聊天模型' : `本会话已切换到「${choice.label}」`, 'success');
+    }, [char, updateCharacter, addToast]);
     const memoryRepairRound = useMemo(() => {
         let assistantIndex = -1;
         for (let i = messages.length - 1; i >= 0; i--) {
@@ -427,6 +464,7 @@ const Chat: React.FC = () => {
         char,
         userProfile,
         apiConfig,
+        replyApiConfig: chatReplyApiConfig,
         groups,
         emojis: aiVisibleEmojis,
         categories: visibleCategories,
@@ -4123,6 +4161,7 @@ const Chat: React.FC = () => {
                 onTriggerAI={handleManualTrigger}
                 hideTrigger={inputPreferences.sendButtonGenerates}
                 onShowCharsPanel={() => setShowPanel('chars')}
+                modelAction={{ label: chatModelLabel, onClick: () => setChatModelSwitcherOpen(true) }}
                 onDeleteBuff={(buffId) => {
                     const currentBuffs = char.activeBuffs || [];
                     const newBuffs = currentBuffs.filter(b => b.id !== buffId);
@@ -4138,6 +4177,14 @@ const Chat: React.FC = () => {
                 chromeStyle={osTheme.chatChromeStyle}
                 hideBuffs={osTheme.chatHideHeaderBuffs}
                 acnh={acnh}
+             />
+
+             <ChatModelSwitcher
+                open={chatModelSwitcherOpen}
+                choices={chatModelChoices}
+                activeChoiceId={activeChatModelChoiceId}
+                onClose={() => setChatModelSwitcherOpen(false)}
+                onSelect={handleChatModelSelect}
              />
 
             {/* 认知消化结果弹窗 — 全屏玻璃拟态 */}
