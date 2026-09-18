@@ -87,6 +87,32 @@ const ImageGenSettingsPanel: React.FC<Props> = ({ apiConfig, updateApiConfig, ad
           <input disabled={disabled} value={draft.model} onChange={event => patch('model', event.target.value)} placeholder="gpt-image-1" className={`${fieldClass} font-mono`} />
         </div>
 
+        <div className="space-y-3 rounded-2xl border border-fuchsia-100 bg-white/70 p-3">
+          <div>
+            <div className="text-xs font-bold text-slate-700">普通聊天生图提示词</div>
+            <p className="mt-1 text-[10px] leading-relaxed text-slate-400">角色会先正常回复，再根据上下文自主判断是否附图。留空时使用内置默认值。</p>
+          </div>
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-fuchsia-500">前置提示词
+            <textarea disabled={disabled} rows={5} value={draft.chatPromptPrefix} onChange={event => patch('chatPromptPrefix', event.target.value)} placeholder="留空使用默认的私聊生活照提示词" className={`${fieldClass} mt-1.5 resize-y font-normal normal-case tracking-normal text-slate-600`} />
+          </label>
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-fuchsia-500">反向提示词
+            <textarea disabled={disabled} rows={4} value={draft.chatNegativePrompt} onChange={event => patch('chatNegativePrompt', event.target.value)} placeholder="留空使用默认的私聊负面约束" className={`${fieldClass} mt-1.5 resize-y font-normal normal-case tracking-normal text-slate-600`} />
+          </label>
+        </div>
+
+        <div className="space-y-3 rounded-2xl border border-violet-100 bg-white/70 p-3">
+          <div>
+            <div className="text-xs font-bold text-slate-700">朋友圈生图提示词</div>
+            <p className="mt-1 text-[10px] leading-relaxed text-slate-400">只影响角色朋友圈配图，与普通聊天完全分开。留空时使用内置默认值。</p>
+          </div>
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-violet-500">前置提示词
+            <textarea disabled={disabled} rows={5} value={draft.momentPromptPrefix} onChange={event => patch('momentPromptPrefix', event.target.value)} placeholder="留空使用默认的朋友圈生活照提示词" className={`${fieldClass} mt-1.5 resize-y font-normal normal-case tracking-normal text-slate-600`} />
+          </label>
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-violet-500">反向提示词
+            <textarea disabled={disabled} rows={4} value={draft.momentNegativePrompt} onChange={event => patch('momentNegativePrompt', event.target.value)} placeholder="留空使用默认的朋友圈负面约束" className={`${fieldClass} mt-1.5 resize-y font-normal normal-case tracking-normal text-slate-600`} />
+          </label>
+        </div>
+
         <div className="grid grid-cols-2 gap-2">
           <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">尺寸
             <select disabled={disabled} value={draft.size} onChange={event => patch('size', event.target.value as ImageGenApiConfig['size'])} className={`${fieldClass} mt-1.5 font-normal normal-case tracking-normal text-slate-600`}>
@@ -149,4 +175,3 @@ const ImageGenSettingsPanel: React.FC<Props> = ({ apiConfig, updateApiConfig, ad
 };
 
 export default ImageGenSettingsPanel;
-
