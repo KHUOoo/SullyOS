@@ -10,6 +10,7 @@ import { getMobileGameArt } from './mobilegameArt';
 import { SCHEMES, hsl, schemePreview, type TgStyle } from './gotchiScheme';
 import { getChibi } from '../../utils/vrWorld/chibi';
 import { isDevDebugAvailable, subscribeDevDebugAvailability } from '../../utils/devDebug';
+import { markNextChatEntryAsList } from '../../utils/chatEntry';
 
 // ===== 手游主题（mobilegame skin）=====
 // 风格：梦幻粉紫二次元手游首页（照搬参考图）。浅粉紫底 + 深紫文字 + 粉色强调，
@@ -195,6 +196,7 @@ const SectionLabel: React.FC<{ cn: string; en: string }> = ({ cn, en }) => (
 
 const MobileGameHome: React.FC = () => {
     const { openApp, characters, activeCharacterId, virtualTime, unreadMessages, isDataLoaded, lastMsgTimestamp } = useOS();
+    const openChatList = () => { markNextChatEntryAsList(); openApp(AppID.Chat); };
 
     const [widgetChar, setWidgetChar] = useState<CharacterProfile | null>(null);
     const [lastMessage, setLastMessage] = useState<string>('');
@@ -480,7 +482,7 @@ const MobileGameHome: React.FC = () => {
                 </div>
 
                 {/* ===== 最新公告（点进去 = 当前聊天）===== */}
-                <button onClick={() => openApp(AppID.Chat)}
+                <button onClick={openChatList}
                     className="relative w-full text-left mt-4 rounded-2xl p-3.5 flex items-center gap-3 active:scale-[0.99] transition-transform animate-fade-in overflow-hidden"
                     style={CARD}>
                     <Sparkles items={[[8, 24, 9, PAL.pink, 0.7], [4, 70, 8, PAL.peri, 0.6]]} />
@@ -539,7 +541,7 @@ const MobileGameHome: React.FC = () => {
             <div className="absolute bottom-0 left-0 w-full px-3.5 z-30 pointer-events-none" style={{ paddingBottom: 'calc(var(--safe-bottom, 0px) + 0.75rem)' }}>
                 <div className="relative pointer-events-auto rounded-[1.9rem] px-3 py-2.5 flex items-end justify-between"
                     style={{ background: 'var(--mg-dock)', border: '1px solid var(--mg-dock-line)', boxShadow: '0 -6px 30px var(--mg-glow20), inset 0 1px 0 var(--mg-dock-line)', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
-                    <DockItem id={AppID.Chat} cn="消息" badge={totalUnread} onClick={() => openApp(AppID.Chat)} />
+                    <DockItem id={AppID.Chat} cn="消息" badge={totalUnread} onClick={openChatList} />
                     <DockItem id={AppID.Character} cn="好友" onClick={() => openApp(AppID.Character)} />
                     {/* 中央罗盘 */}
                     <button onClick={() => setDrawerOpen(true)} aria-label="全部应用" className="-mt-8 w-[4.2rem] h-[4.2rem] rounded-full flex items-center justify-center active:scale-95 transition-transform shrink-0"

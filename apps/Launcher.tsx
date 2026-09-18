@@ -16,6 +16,7 @@ import { getDailyScheduleForChar } from '../utils/dailySchedule';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
 import { resolveCharTimeZone } from '../utils/timezone';
 import { trackEvent } from '../utils/analytics';
+import { markNextChatEntryAsList } from '../utils/chatEntry';
 
 const CompanionHome = React.lazy(() => import('../components/os/CompanionHome'));
 
@@ -477,7 +478,11 @@ let _lastPageIndex = 0;
 // --- Main Launcher ---
 
 const Launcher: React.FC = () => {
-  const { openApp, characters, activeCharacterId, theme, updateTheme, lastMsgTimestamp, isDataLoaded, unreadMessages } = useOS();
+  const { openApp: openSystemApp, characters, activeCharacterId, theme, updateTheme, lastMsgTimestamp, isDataLoaded, unreadMessages } = useOS();
+  const openApp = useCallback((id: AppID) => {
+      if (id === AppID.Chat) markNextChatEntryAsList();
+      openSystemApp(id);
+  }, [openSystemApp]);
 
   // Local state for widget data to prevent context trashing
   const [widgetChar, setWidgetChar] = useState<CharacterProfile | null>(null);
@@ -628,7 +633,11 @@ const Launcher: React.FC = () => {
               const last = recent.messages[0];
               if (last) {
                   const cleanContent = last.content.replace(/\[.*?\]/g, '').trim();
-                  setLastMessage(cleanContent || (last.type === 'image' ? '[图片]' : '[消息]'));
+                  const mediaPreview = last.type === 'image' ? '[图片]'
+                      : last.type === 'emoji' ? '[表情包]'
+                      : last.type === 'voice' ? `[语音] ${String(last.metadata?.transcript || '').trim()}`.trim()
+                      : '[消息]';
+                  setLastMessage(last.type === 'voice' || last.type === 'image' || last.type === 'emoji' ? mediaPreview : (cleanContent || mediaPreview));
               } else {
                   setLastMessage(targetChar.description || "System Ready.");
               }

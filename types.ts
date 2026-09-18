@@ -263,6 +263,15 @@ export interface VisionApiConfig {
   model: string;
 }
 
+/** 独立 STT（语音转文字）接口，遵循 OpenAI audio/transcriptions 契约。 */
+export interface SpeechToTextApiConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  language?: string;
+}
+
 export type ImageGenAspectRatio = 'auto' | '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4' | '9:16' | '16:9';
 export type ImageGenReferenceMode = 'off' | 'avatar' | 'global' | 'hybrid' | 'character';
 
@@ -299,6 +308,8 @@ export interface APIConfig {
   apiKey: string;
   // 可选识图中转：给不支持 image_url 的主模型补视觉能力。
   visionApi?: VisionApiConfig;
+  /** 用户语音消息的独立转写接口，不影响聊天、TTS 或其它模型。 */
+  sttApi?: SpeechToTextApiConfig;
   /** 聊天里“拍给我看”使用的独立图片生成接口。 */
   imageGenApi?: ImageGenApiConfig;
   minimaxApiKey?: string;

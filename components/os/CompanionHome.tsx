@@ -20,6 +20,7 @@ import {
 import { useOS } from '../../context/OSContext';
 import { AppID, type AvatarTouchRegion, type CompanionStartupSettings, type CompanionTouchReaction, type CompanionTouchSettings, type DailySchedule } from '../../types';
 import { Icons, INSTALLED_APPS } from '../../constants';
+import { markNextChatEntryAsList } from '../../utils/chatEntry';
 import VRMVideoCallStage from '../call/VRMVideoCallStage';
 import { ScheduleFullscreenViewer } from '../schedule/ScheduleHomeWidget';
 import type { AvatarMotionState } from '../call/VRMAvatarCanvas';
@@ -1993,6 +1994,7 @@ const CompanionHome: React.FC = () => {
 
   const launchCompanionApp = (id: AppID) => {
     setAppStarOpen(false);
+    if (id === AppID.Chat) markNextChatEntryAsList();
     openApp(id);
   };
 
@@ -2609,7 +2611,7 @@ const CompanionHome: React.FC = () => {
                 <span className="flex items-center gap-1 text-[8px] font-semibold tracking-[0.14em] sm:text-[9px]" style={{ color: uiTint }}><Sparkle size={11} weight="fill" />当前心声</span>
                 <span className="mt-1 block h-8 overflow-hidden text-[9px] leading-4 text-white/80 sm:h-9 sm:text-[11px]" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{hudContent.thought || '尚未记录心声'}</span>
               </button>
-              <button onClick={() => openApp(AppID.Chat)} className="min-w-0 border-r border-white/10 px-3 py-2 text-left active:bg-white/5 sm:px-4 sm:py-2.5" data-testid="companion-hud-chat">
+              <button onClick={() => launchCompanionApp(AppID.Chat)} className="min-w-0 border-r border-white/10 px-3 py-2 text-left active:bg-white/5 sm:px-4 sm:py-2.5" data-testid="companion-hud-chat">
                 <span className="flex items-center gap-1 text-[8px] font-semibold tracking-[0.14em] sm:text-[9px]" style={{ color: uiTint }}><Icons.Chat className="h-[11px] w-[11px] sm:h-[13px] sm:w-[13px]" />最近聊天</span>
                 <span className="mt-1 block h-8 overflow-hidden text-[9px] leading-4 text-white/80 sm:h-9 sm:text-[11px]" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{hudContent.recentChat || '还没有聊天记录'}</span>
               </button>

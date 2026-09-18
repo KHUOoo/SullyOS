@@ -632,6 +632,13 @@ const defaultApiConfig: APIConfig = {
     apiKey: '',
     model: '',
   },
+  sttApi: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: 'whisper-1',
+    language: 'zh',
+  },
   imageGenApi: {
     enabled: false,
     baseUrl: '',
@@ -4397,6 +4404,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       rawData = rawData.filter((m: Message) => (
                           m.type === 'image'
                           || m.type === 'emoji'
+                          || m.type === 'voice'
                           || !!m.metadata?.cameraSnapshotRef
                           || m.metadata?.cameraSnapshotExpired === true
                       ));

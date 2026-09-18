@@ -59,11 +59,11 @@ export const CHARACTER_PHOTO_MODES: Array<{ id: CharacterPhotoMode; label: strin
   { id: 'free', label: '自由照片', hint: '按补充描述决定画面' },
 ];
 
-/** 只拦截明确且较短的“要照片”话术，避免普通聊天里提到拍照时误触。 */
+/** 只拦截有明确动作和对象的“要照片”话术，避免普通聊天里提到拍照时误触。 */
 export const isCharacterPhotoRequestText = (text: string): boolean => {
   const clean = text.trim().replace(/[！!。.?？～~]+$/g, '');
-  if (!clean || clean.length > 80) return false;
-  return /(拍(?:一张|张)?(?:照|照片|自拍)?给我看|拍给我看看|发(?:一张|张|个)?(?:自拍|照片|相片)(?:给我|看看)?|来(?:一张|张|个)?(?:自拍|照片|相片)|给我看看你(?:现在|今天)?(?:的样子)?)/.test(clean);
+  if (!clean) return false;
+  return /(拍(?:一张|张)?(?:照|照片|自拍)?给我看|拍给我看看|发(?:一张|张|个)?(?:自拍|照片|相片|图片)(?:给我|看看)?|来(?:一张|张|个)?(?:自拍|照片|相片|图片)|给我看看你(?:现在|今天)?(?:的样子)?|(?:给我|让我)(?:看看|看下|看一眼)(?:你|你那边|你的房间|房间|环境|风景|穿搭|衣服|吃的)|(?:send|show|take)\s+(?:me\s+)?(?:a\s+)?(?:photo|picture|selfie|pic))/i.test(clean);
 };
 
 const DEFAULT_IMAGE_CONFIG: ImageGenApiConfig = {
@@ -245,10 +245,16 @@ export async function planContextualChatImage(input: {
   user: UserProfile;
   messages: Message[];
   apiConfig: APIConfig;
+  forceImage?: boolean;
 }): Promise<ContextualChatImagePlan> {
   const { char, user, messages, apiConfig } = input;
+  const forcedFallback = (): ContextualChatImagePlan => ({
+    sendImage: true,
+    mode: 'free',
+    scene: `根据用户刚才明确提出的照片请求，生成 ${char.name} 此刻自然拍下并发给用户的一张真实生活照片。`,
+  });
   if (!apiConfig.baseUrl || !apiConfig.apiKey || !apiConfig.model) {
-    return { sendImage: false, mode: 'free', scene: '' };
+    return input.forceImage ? forcedFallback() : { sendImage: false, mode: 'free', scene: '' };
   }
   const recent = messages.slice(-24);
   const core = ContextBuilder.buildCoreContext(
@@ -259,9 +265,13 @@ export async function planContextualChatImage(input: {
     undefined,
     { conversational: true, worldbookMessages: recent.map(message => ({ role: message.role, content: message.content })) },
   );
+  const forceInstruction = input.forceImage
+    ? `用户已经明确要求照片，本轮 sendImage 必须为 true；你只需选择最合适的类型并写出具体画面。`
+    : `没有强制要求时，仍可根据角色刚才的表达和上下文主动分享照片，但不要为了使用功能而强行发图。`;
   const system = `${core}\n\n### 临时任务：私聊附图决策器\n你只判断 ${char.name} 在刚完成这轮文字回复后，是否会自然地再附上一张图片。`
     + `只有用户明确想看照片/实物/环境/穿搭/食物，或角色刚说了“给你看”、正在分享适合视觉呈现的当下时，才选择发图。`
-    + `普通寒暄、纯情绪安慰、争论、严肃话题、与视觉无关的内容一律不发图；不要为了使用功能而强行发图。`
+    + `${forceInstruction}`
+    + `普通寒暄、纯情绪安慰、争论、严肃话题、与视觉无关的内容通常不发图。`
     + `若发图，scene 要写成可直接交给图片模型的具体中文摄影描述，符合角色外貌、人设、当前时间、地点和双方关系。`
     + `只输出 JSON：{"sendImage":true或false,"mode":"selfie|outfit|food|pov|room|free","scene":"具体画面；不发图时留空"}。`;
   const request = recent.map(message => messagePreview(message, char.name, user.name)).join('\n') || '（暂无聊天）';
@@ -281,7 +291,8 @@ export async function planContextualChatImage(input: {
     60_000,
     { appId: 'chat', appName: '聊天', charId: char.id, charName: char.name, purpose: '判断是否自主附图' },
   );
-  return parseContextualChatImagePlan(extractContent(data));
+  const plan = parseContextualChatImagePlan(extractContent(data));
+  return input.forceImage && !plan.sendImage ? forcedFallback() : plan;
 }
 
 /** 把自主附图计划与聊天专用前缀/反向提示词合并成最终图片提示词。 */

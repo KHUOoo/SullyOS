@@ -9,6 +9,7 @@ import {
   isCharacterPhotoRequestText,
   normalizeMomentPhotoType,
   parseContextualChatImagePlan,
+  planContextualChatImage,
   resolveImageGenConfig,
   shouldGenerateMomentImage,
 } from './imageGenApi';
@@ -28,6 +29,8 @@ describe('imageGenApi', () => {
     expect(isCharacterPhotoRequestText('拍给我看！')).toBe(true);
     expect(isCharacterPhotoRequestText('现在发张自拍给我看看')).toBe(true);
     expect(isCharacterPhotoRequestText('来一张照片')).toBe(true);
+    expect(isCharacterPhotoRequestText('给我看看你的房间')).toBe(true);
+    expect(isCharacterPhotoRequestText('send me a selfie')).toBe(true);
     expect(isCharacterPhotoRequestText('昨天我们聊到的那张照片让我想到很多事情')).toBe(false);
     expect(isCharacterPhotoRequestText('拍照这个功能到底是怎么实现的？')).toBe(false);
   });
@@ -54,6 +57,21 @@ describe('imageGenApi', () => {
       .toEqual({ sendImage: true, mode: 'selfie', scene: '窗边随手拍的自拍' });
     expect(parseContextualChatImagePlan('{"sendImage":true,"mode":"unknown","scene":""}').sendImage).toBe(false);
     expect(parseContextualChatImagePlan('普通回复').sendImage).toBe(false);
+  });
+
+  it('keeps an explicit photo request forced even when the planner votes text-only', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '{"sendImage":false,"mode":"free","scene":""}' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    const plan = await planContextualChatImage({
+      char: { id: 'char-1', name: '角色' } as any,
+      user: { name: '用户' } as any,
+      messages: [{ id: 1, role: 'user', type: 'text', content: '拍给我看', timestamp: 1 }] as any,
+      apiConfig: { baseUrl: 'https://chat.example/v1', apiKey: 'key', model: 'model' },
+      forceImage: true,
+    });
+    expect(plan.sendImage).toBe(true);
+    expect(plan.scene).toContain('明确提出的照片请求');
   });
 
   it('uses independently configured chat prefix and negative prompt', () => {

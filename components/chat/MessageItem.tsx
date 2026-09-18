@@ -1383,6 +1383,7 @@ interface MessageItemProps {
     isLatestMessage?: boolean;
     /** 图片完成解码并确定高度后，通知聊天列表重新校准贴底位置。 */
     onMediaLoad?: (messageId: number) => void;
+    onOpenImage?: (message: Message) => void;
     onLongPress: (m: Message) => void;
     onReply: (m: Message) => void;
     selectionMode: boolean;
@@ -1446,6 +1447,7 @@ const MessageItem = React.memo(({
     userAvatar,
     isLatestMessage = false,
     onMediaLoad,
+    onOpenImage,
     onLongPress,
     onReply,
     selectionMode,
@@ -1503,6 +1505,7 @@ const MessageItem = React.memo(({
     // 气泡底纹画在 CSS background-image 上，拿不到 <img> 那层的自动解析，只能在顶层
     // 无条件解析一次（hook 不能进条件分支）。挂件/头像挂件走 TokenImg，各自组件内解析。
     const bubbleBgUrl = useBlobRefUrl(styleConfig.backgroundImage);
+    const voiceMessageUrl = useBlobRefUrl(m.type === 'voice' ? m.content : undefined);
     const [showVoiceText, setShowVoiceText] = useState(false);
     const [showSarTruth, setShowSarTruth] = useState(false);
     const [openingCollaborationFile, setOpeningCollaborationFile] = useState(false);
@@ -3404,9 +3407,21 @@ const MessageItem = React.memo(({
         );
     }
 
+    if (m.type === 'voice') {
+        const transcript = String(m.metadata?.transcript || '').trim();
+        const duration = Math.max(0, Math.round(Number(m.metadata?.durationMs || 0) / 1000));
+        return commonLayout(
+            <div className={`min-w-[190px] max-w-[250px] rounded-2xl px-3 py-2.5 ${isUser ? 'bg-primary text-white' : 'bg-white text-slate-700 shadow-sm'}`}>
+                <div className="mb-1 flex items-center justify-between text-[10px] opacity-70"><span>语音消息</span><span>{duration ? `${duration}s` : ''}</span></div>
+                {voiceMessageUrl ? <audio src={voiceMessageUrl} controls preload="metadata" className="h-9 w-full" /> : <div className="py-2 text-xs opacity-60">语音文件不可用</div>}
+                {transcript && <div className="mt-2 border-t border-current/10 pt-2 text-[11px] leading-relaxed opacity-80">{transcript}</div>}
+            </div>
+        );
+    }
+
     if (m.type === 'image') {
         return commonLayout(
-            <div className="relative group">
+            <button type="button" className="relative group block text-left" onClick={(event) => { event.stopPropagation(); if (!selectionMode) onOpenImage?.(m); }} aria-label="放大查看图片">
                 {m.content ? (
                     <TokenImg
                         value={m.content}
@@ -3419,7 +3434,7 @@ const MessageItem = React.memo(({
                 ) : (
                     <div className="px-4 py-6 rounded-2xl bg-slate-100 text-slate-400 text-xs italic text-center min-w-[120px]">[图片已丢失]</div>
                 )}
-            </div>
+            </button>
         );
     }
 
@@ -3928,6 +3943,7 @@ const MessageItem = React.memo(({
            prev.userAvatar === next.userAvatar &&
            prev.isLatestMessage === next.isLatestMessage &&
            prev.onMediaLoad === next.onMediaLoad &&
+           prev.onOpenImage === next.onOpenImage &&
            prev.selectionMode === next.selectionMode &&
            prev.isSelected === next.isSelected &&
            prev.translationEnabled === next.translationEnabled &&

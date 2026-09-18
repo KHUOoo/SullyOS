@@ -36,6 +36,7 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import StorageUsagePanel from '../components/settings/StorageUsagePanel';
 import ImageGenSettingsPanel from '../components/settings/ImageGenSettingsPanel';
+import SpeechToTextSettingsPanel from '../components/settings/SpeechToTextSettingsPanel';
 import McpConnectionConsole from '../components/settings/McpConnectionConsole';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
@@ -2733,6 +2734,14 @@ const Settings: React.FC = () => {
             icon={<div className="p-2 bg-fuchsia-100/60 rounded-xl text-fuchsia-600"><Sun className="w-4 h-4" weight="bold" /></div>}
         >
             <ImageGenSettingsPanel apiConfig={apiConfig} updateApiConfig={updateApiConfig} addToast={addToast} />
+        </SettingsSection>
+
+        <SettingsSection
+            title="STT 语音转文字"
+            badge={<span className={`text-[9px] font-bold px-2 py-1 rounded-full ${apiConfig.sttApi?.enabled ? 'bg-cyan-100 text-cyan-600' : 'bg-slate-100 text-slate-400'}`}>{apiConfig.sttApi?.enabled ? '已接入' : '未接入'}</span>}
+            icon={<div className="p-2 bg-cyan-100/60 rounded-xl text-cyan-600"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-4 h-4"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg></div>}
+        >
+            <SpeechToTextSettingsPanel apiConfig={apiConfig} updateApiConfig={updateApiConfig} addToast={addToast} />
         </SettingsSection>
 
         {/* API 调用记录入口 — 点开看最近 5 天各 App / 角色 / 用途的调用明细 */}

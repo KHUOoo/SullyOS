@@ -18,6 +18,7 @@ export const normalizeApiModel = (value: unknown): string =>
 
 export function normalizeApiConfig(config: APIConfig): APIConfig {
   const visionApi = config.visionApi;
+  const sttApi = config.sttApi;
   const imageGenApi = config.imageGenApi;
   return {
     ...config,
@@ -30,6 +31,15 @@ export function normalizeApiConfig(config: APIConfig): APIConfig {
         baseUrl: normalizeApiBaseUrl(visionApi.baseUrl),
         apiKey: normalizeApiCredential(visionApi.apiKey),
         model: normalizeApiModel(visionApi.model),
+      },
+    } : {}),
+    ...(sttApi ? {
+      sttApi: {
+        enabled: sttApi.enabled === true,
+        baseUrl: normalizeApiBaseUrl(sttApi.baseUrl),
+        apiKey: normalizeApiCredential(sttApi.apiKey),
+        model: normalizeApiModel(sttApi.model),
+        language: normalizeApiModel(sttApi.language || 'zh'),
       },
     } : {}),
     ...(imageGenApi ? {

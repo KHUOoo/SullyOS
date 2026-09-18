@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Lightning, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Alarm, Sparkle, FadersHorizontal, LinkSimple, Star, Briefcase, Camera } from '@phosphor-icons/react';
+import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Lightning, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Alarm, Sparkle, FadersHorizontal, LinkSimple, Star, Briefcase, Camera, Microphone, Stop } from '@phosphor-icons/react';
 import { CharacterProfile, ChatTheme, EmojiCategory, Emoji } from '../../types';
 import { PRESET_THEMES } from './ChatConstants';
 import TokenImg from '../os/TokenImg';
@@ -48,6 +48,10 @@ interface ChatInputAreaProps {
     actionsContent?: React.ReactNode;
     onPanelAction: (type: string, payload?: any) => void;
     onImageSelect: (file: File) => void;
+    onVoiceRecorded?: (blob: Blob, durationMs: number) => void | Promise<void>;
+    onVoiceError?: (message: string) => void;
+    voiceConfigured?: boolean;
+    voiceSending?: boolean;
     isSummarizing: boolean;
     // Categories Support
     categories?: EmojiCategory[];
@@ -85,7 +89,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     unreadMessages = {},
     customThemes = [], onUpdateTheme = () => {}, onRemoveTheme = () => {}, activeThemeId = '',
     actionsContent,
-    onPanelAction, onImageSelect, isSummarizing,
+    onPanelAction, onImageSelect, onVoiceRecorded, onVoiceError, voiceConfigured = false, voiceSending = false, isSummarizing,
     categories = [], activeCategory = 'default',
     onReroll, canReroll,
     isProactiveActive,
@@ -107,6 +111,12 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     const [isInputFocused, setIsInputFocused] = useState(false);
     const [isComposing, setIsComposing] = useState(false);
     const [dismissedSuggestionInput, setDismissedSuggestionInput] = useState<string | null>(null);
+    const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+    const [recordingSeconds, setRecordingSeconds] = useState(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
+    const recordingStartedAtRef = useRef(0);
+    const discardRecordingRef = useRef(false);
     const suggestedEmojis = useMemo(() => emojiSuggestionsEnabled && !isComposing && !selectionMode
         && showPanel === 'none' && dismissedSuggestionInput !== input
         ? findEmojiSuggestions(suggestionEmojis, input) : [],
@@ -123,6 +133,67 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     useEffect(() => {
         onInputFocusChange?.(isInputFocused);
     }, [isInputFocused, onInputFocusChange]);
+
+    useEffect(() => {
+        if (!isRecordingVoice) return;
+        const timer = window.setInterval(() => setRecordingSeconds(Math.max(1, Math.floor((Date.now() - recordingStartedAtRef.current) / 1000))), 500);
+        return () => window.clearInterval(timer);
+    }, [isRecordingVoice]);
+
+    useEffect(() => () => {
+        discardRecordingRef.current = true;
+        if (mediaRecorderRef.current?.state === 'recording') {
+            mediaRecorderRef.current.onstop = null;
+            mediaRecorderRef.current.stop();
+        }
+        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+    }, []);
+
+    const toggleVoiceRecording = async () => {
+        if (voiceSending) return;
+        if (isRecordingVoice) {
+            mediaRecorderRef.current?.stop();
+            return;
+        }
+        if (!voiceConfigured) {
+            onVoiceError?.('请先到设置 → STT 语音转文字完成配置');
+            return;
+        }
+        if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+            onVoiceError?.('当前浏览器不支持录音');
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const recorder = new MediaRecorder(stream);
+            const chunks: BlobPart[] = [];
+            mediaStreamRef.current = stream;
+            mediaRecorderRef.current = recorder;
+            recordingStartedAtRef.current = Date.now();
+            discardRecordingRef.current = false;
+            setRecordingSeconds(0);
+            recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+            recorder.onerror = () => onVoiceError?.('录音失败，请检查麦克风权限');
+            recorder.onstop = () => {
+                const durationMs = Math.max(500, Date.now() - recordingStartedAtRef.current);
+                const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+                stream.getTracks().forEach(track => track.stop());
+                mediaStreamRef.current = null;
+                mediaRecorderRef.current = null;
+                if (!discardRecordingRef.current) {
+                    setIsRecordingVoice(false);
+                    setRecordingSeconds(0);
+                    if (blob.size) void onVoiceRecorded?.(blob, durationMs);
+                }
+            };
+            recorder.start();
+            setShowPanel('none');
+            setIsRecordingVoice(true);
+        } catch (error: any) {
+            mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+            onVoiceError?.(error?.name === 'NotAllowedError' ? '没有麦克风权限，请在浏览器设置中允许录音' : '无法开始录音');
+        }
+    };
 
     useEffect(() => {
         setIsInputFocused(!!textareaRef.current && document.activeElement === textareaRef.current);
@@ -705,6 +776,14 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                         <Plus className="w-6 h-6" weight="bold" />
                     </button>
                     <div className={`sully-chat-input-wrap flex-1 min-w-0 flex items-center px-1 transition-all ${useIOSStandaloneInputFix ? 'overflow-visible' : 'overflow-hidden'} ${inputWrapClass} ${isPixelStyle ? 'focus-within:bg-[#fff7ed]' : isDiscordStyle ? 'focus-within:bg-slate-800 focus-within:border-white/20' : 'border border-transparent focus-within:bg-white focus-within:border-primary/30'}`}>
+                        {onVoiceRecorded && (
+                            <button type="button" onClick={toggleVoiceRecording} aria-label={isRecordingVoice ? '结束录音并发送' : '发送语音'} title={isRecordingVoice ? '结束录音并发送' : '发送语音'} className={`ml-1 grid h-9 w-9 shrink-0 place-items-center rounded-full transition ${isRecordingVoice ? 'bg-red-500 text-white animate-pulse' : isDiscordStyle ? 'text-slate-400 hover:text-sky-300' : 'text-slate-400 hover:text-primary'} ${voiceSending ? 'opacity-50' : ''}`}>
+                                {isRecordingVoice ? <Stop className="h-4 w-4" weight="fill" /> : <Microphone className="h-5 w-5" weight="bold" />}
+                            </button>
+                        )}
+                        {isRecordingVoice ? (
+                            <div className={`flex-1 px-3 py-3 text-sm font-semibold ${isDiscordStyle ? 'text-white' : 'text-red-500'}`}>正在录音 {recordingSeconds}s · 点停止发送</div>
+                        ) : (
                         <textarea
                             ref={textareaRef}
                             rows={1}
@@ -723,6 +802,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                             placeholder="Message..."
                             style={{ height: 'auto' }}
                         />
+                        )}
                         <button onClick={() => setShowPanel(showPanel === 'emojis' ? 'none' : 'emojis')} className={`p-2 shrink-0 ${isDiscordStyle ? 'text-slate-400 hover:text-sky-300' : isPixelStyle ? 'text-[#8f674a] hover:text-[#a16207]' : 'text-slate-400 hover:text-primary'}`}>
                             <Smiley className="w-6 h-6" weight="regular" />
                         </button>
