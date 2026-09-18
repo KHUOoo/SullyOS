@@ -119,7 +119,13 @@ import {
     validateInstallableArtifact,
 } from '../features/collaboration/makers';
 import { upsertMountedWorldbooks } from '../utils/worldbook';
-import { buildCharacterPhotoPrompt, generateCharacterPhotos, isCharacterPhotoRequestText, type CharacterPhotoMode } from '../utils/imageGenApi';
+import {
+    buildCharacterPhotoPrompt,
+    buildContextualChatPhotoPrompt,
+    generateCharacterPhotos,
+    planContextualChatImage,
+    type CharacterPhotoMode,
+} from '../utils/imageGenApi';
 
 const CollaborationWindow = React.lazy(() => import('../features/collaboration/CollaborationWindow'));
 
@@ -176,7 +182,7 @@ const Chat: React.FC = () => {
     const [characterPhotoOpen, setCharacterPhotoOpen] = useState(false);
     const [characterPhotoBusy, setCharacterPhotoBusy] = useState(false);
     const [characterPhotoInitialNote, setCharacterPhotoInitialNote] = useState('');
-    const [characterPhotoFromChat, setCharacterPhotoFromChat] = useState(false);
+    const contextualImageProcessingRef = useRef(new Set<number>());
     
     // Emoji State
     const [emojis, setEmojis] = useState<Emoji[]>([]);
@@ -1421,16 +1427,6 @@ const Chat: React.FC = () => {
             return;
         }
 
-        // 明确的短句“拍给我看 / 发张自拍”等，与加号面板入口走同一套生图流程。
-        // 先弹确认让用户选照片类型；确认后再把原句落进聊天，避免误触时污染记录。
-        if (!customContent && type === 'text' && isCharacterPhotoRequestText(text)) {
-            setCharacterPhotoInitialNote(text);
-            setCharacterPhotoFromChat(true);
-            setCharacterPhotoOpen(true);
-            setShowPanel('none');
-            return;
-        }
-
         if (!customContent) { setInput(''); localStorage.removeItem(draftKey); }
         
         // 图片 / 表情消息存的是短令牌，图片二进制单独躺在 blob_assets 里，省掉 base64 那 ~33%
@@ -1454,7 +1450,21 @@ const Chat: React.FC = () => {
             })
             : null;
 
-        const msgPayload: any = { charId: char.id, role: 'user', type, content: storedContent, metadata };
+        const contextualImageMeta = type === 'text' && apiConfig.imageGenApi?.enabled
+            ? {
+                contextualImage: {
+                    status: 'pending',
+                    turnId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                },
+            }
+            : {};
+        const msgPayload: any = {
+            charId: char.id,
+            role: 'user',
+            type,
+            content: storedContent,
+            metadata: { ...(metadata || {}), ...contextualImageMeta },
+        };
         
         if (replyTarget) {
             msgPayload.replyTo = {
@@ -1762,37 +1772,10 @@ const Chat: React.FC = () => {
         }
         setCharacterPhotoBusy(true);
         try {
-            let promptMessages = messages;
+            const promptMessages = messages;
             const trimmedNote = note.trim();
-            const shouldReplyWithText = characterPhotoFromChat && !!characterPhotoInitialNote.trim();
-            if (shouldReplyWithText) {
-                const requestText = characterPhotoInitialNote.trim();
-                await DB.saveMessage({ charId: char.id, role: 'user', type: 'text', content: requestText });
-                promptMessages = await DB.getRecentMessagesByCharId(char.id, 200);
-                setInput('');
-                localStorage.removeItem(draftKey);
-            }
-
-            // 确认后马上回到聊天页：文字回复与照片在后台并行生成。此前弹窗会一直挡到
-            // 图片完成，而且自然语言入口只产出图片、不触发角色正常回复，看起来像角色
-            // “不会说话，只甩来一张图”。加号面板主动生图仍只生成照片；只有聊天里明确
-            // 说“拍给我看 / 发张自拍”等，才同时触发本轮文字回复。
             setCharacterPhotoOpen(false);
             setCharacterPhotoInitialNote('');
-            setCharacterPhotoFromChat(false);
-
-            if (shouldReplyWithText) {
-                await reloadMessages(visibleCountRef.current);
-                addToast(`${char.name} 正在回复，也在准备照片…`, 'info');
-                if (!isTyping) {
-                    if (isInstantConfigReady()) {
-                        setInstantSendingActive(true);
-                        void triggerAI(promptMessages, undefined, () => setInstantSendingActive(false));
-                    } else {
-                        void triggerAI(promptMessages);
-                    }
-                }
-            }
 
             const prompt = await buildCharacterPhotoPrompt({
                 char,
@@ -1847,6 +1830,129 @@ const Chat: React.FC = () => {
         }
     };
 
+    // 普通聊天不再拦截“拍张照片给我”并弹窗。文字回复完整落库后，再用角色设定和
+    // 本轮上下文判断是否自然附图；不适合、接口失败或生图失败时都安静保留纯文字。
+    useEffect(() => {
+        if (!char || !apiConfig.imageGenApi?.enabled || isTyping || instantChatPending) return;
+
+        let userIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const marker = messages[index].metadata?.contextualImage;
+            if (messages[index].role === 'user' && marker?.status === 'pending') {
+                userIndex = index;
+                break;
+            }
+        }
+        if (userIndex < 0) return;
+        const anchor = messages[userIndex];
+        if (contextualImageProcessingRef.current.has(anchor.id)) return;
+
+        const messagesAfterUser = messages.slice(userIndex + 1);
+        if (messagesAfterUser.some(message => message.role === 'user')) return;
+        const assistantReplies = messagesAfterUser.filter(message => message.role === 'assistant' && message.type === 'text');
+        if (assistantReplies.length === 0) return;
+
+        let previousAssistantIndex = -1;
+        for (let index = userIndex - 1; index >= 0; index -= 1) {
+            if (messages[index].role === 'assistant') {
+                previousAssistantIndex = index;
+                break;
+            }
+        }
+        const pendingTurnUsers = messages
+            .slice(previousAssistantIndex + 1, userIndex + 1)
+            .filter(message => message.role === 'user' && message.metadata?.contextualImage?.status === 'pending');
+        const pendingIds = pendingTurnUsers.map(message => message.id);
+        contextualImageProcessingRef.current.add(anchor.id);
+
+        void (async () => {
+            const setTurnStatus = async (status: 'processing' | 'done' | 'failed', outcome?: string) => {
+                await Promise.all(pendingIds.map(id => DB.updateMessageMetadata(id, previous => ({
+                    ...(previous || {}),
+                    contextualImage: {
+                        ...(previous?.contextualImage || {}),
+                        status,
+                        outcome,
+                        updatedAt: Date.now(),
+                    },
+                }))));
+            };
+            try {
+                await setTurnStatus('processing');
+                const promptMessages = messages.slice(Math.max(0, previousAssistantIndex + 1));
+                const plan = await planContextualChatImage({
+                    char,
+                    user: userProfile,
+                    messages: promptMessages,
+                    apiConfig,
+                });
+                if (!plan.sendImage) {
+                    await setTurnStatus('done', 'text_only');
+                    return;
+                }
+                const prompt = buildContextualChatPhotoPrompt({
+                    char,
+                    user: userProfile,
+                    messages: promptMessages,
+                    plan,
+                    apiConfig,
+                });
+                const [image] = await generateCharacterPhotos({
+                    prompt,
+                    char,
+                    messages: promptMessages,
+                    apiConfig,
+                    count: 1,
+                    surface: 'chat',
+                });
+                if (!image) {
+                    await setTurnStatus('done', 'text_only');
+                    return;
+                }
+                let stored = image.startsWith('data:') ? await migrateDataUrlToRef(image) : image;
+                if (/^https?:\/\//i.test(image)) {
+                    try {
+                        const response = await fetch(image);
+                        if (response.ok) stored = await putImageBlob(await response.blob());
+                    } catch { /* CORS 等情况保留远端 URL */ }
+                }
+                const sourceMessageId = await DB.saveMessage({
+                    charId: char.id,
+                    role: 'assistant',
+                    type: 'image',
+                    content: stored,
+                    metadata: {
+                        source: 'contextual_character_photo',
+                        sourceUserMessageId: anchor.id,
+                        photoMode: plan.mode,
+                        prompt,
+                    },
+                });
+                try {
+                    await DB.saveGalleryImage({
+                        id: `img-${Date.now()}-${Math.random()}`,
+                        charId: char.id,
+                        url: stored,
+                        timestamp: Date.now(),
+                        sourceMessageId,
+                        savedDate: localDateKey,
+                        chatContext: promptMessages.slice(-10).map(message => `${message.role === 'assistant' ? char.name : userProfile.name}: ${message.type === 'text' ? message.content.slice(0, 100) : '[图片]'}`),
+                    });
+                } catch (galleryError) {
+                    console.warn('[Chat] 自主附图存入相册失败，聊天图片已保留', galleryError);
+                }
+                await setTurnStatus('done', 'image_sent');
+                markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
+                if (activeCharIdRef.current === char.id) await reloadMessages(visibleCountRef.current);
+            } catch (error) {
+                console.warn('[Chat] contextual image generation failed; kept text-only reply', error);
+                await setTurnStatus('failed', 'text_only').catch(() => undefined);
+            } finally {
+                contextualImageProcessingRef.current.delete(anchor.id);
+            }
+        })();
+    }, [apiConfig, char, groups, instantChatPending, isTyping, localDateKey, messages, realtimeConfig, reloadMessages, userProfile]);
+
     const handlePanelAction = (type: string, payload?: any) => {
         // 只统计「打开某个面板 / 开关某个能力」这几个固定入口，名单写死在这里；
         // 选表情、选分类之类的动作不上报。
@@ -1864,7 +1970,6 @@ const Chat: React.FC = () => {
             case 'character-photo':
                 setShowPanel('none');
                 setCharacterPhotoInitialNote('');
-                setCharacterPhotoFromChat(false);
                 setCharacterPhotoOpen(true);
                 break;
             case 'collaboration': setShowPanel('none'); setCollaborationOpen(true); break;
@@ -4528,7 +4633,6 @@ const Chat: React.FC = () => {
                     onClose={() => {
                         setCharacterPhotoOpen(false);
                         setCharacterPhotoInitialNote('');
-                        setCharacterPhotoFromChat(false);
                     }}
                     onSubmit={handleCharacterPhotoSubmit}
                 />
