@@ -20,7 +20,7 @@ import { XhsMcpClient, extractNotesFromMcpData, normalizeXhsLiteDetail } from '.
 import { extractWebpageContent, detectFirstUrl, detectXhsShortUrl, extractXhsShareTitle, isXhsUrl, extractXhsNoteLink, expandShortUrl, type ExtractedWebpage } from '../utils/webpageExtractor';
 import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
-import { isImageValue, migrateDataUrlToRef, putImageBlob, useBlobRefUrl } from '../utils/blobRef';
+import { getBlobForRef, isBlobRef, isImageValue, migrateDataUrlToRef, putBlobRef, putImageBlob, useBlobRefUrl } from '../utils/blobRef';
 import { buildReplySnapshotContent } from '../utils/applyAssistantPostProcessing';
 import { resolveLifeRecordCard } from '../utils/lifeRecords';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
@@ -41,6 +41,8 @@ import {resolveDecorationTheme} from '../utils/chatDecoration';
 import ChatDecorationAnnouncement from '../components/chat/ChatDecorationAnnouncement';
 import ChatDecorationPanel, {DecorationTab} from '../components/chat/ChatDecorationPanel';
 import ChatInputArea from '../components/chat/ChatInputArea';
+import ChatConversationList from '../components/chat/ChatConversationList';
+import ChatImageViewer from '../components/chat/ChatImageViewer';
 import { loadChatInputPreferences, saveChatInputPreferences } from '../utils/chatInputPreferences';
 import InstantChatRouteNotice from '../components/chat/InstantChatRouteNotice';
 import MemoryRepairPortal from '../components/chat/MemoryRepairPortal';
@@ -131,9 +133,13 @@ import {
     buildCharacterPhotoPrompt,
     buildContextualChatPhotoPrompt,
     generateCharacterPhotos,
+    isCharacterPhotoRequestText,
     planContextualChatImage,
     type CharacterPhotoMode,
 } from '../utils/imageGenApi';
+import { consumeChatEntryAsList } from '../utils/chatEntry';
+import { loadRecentEmojiNames, recordRecentEmoji, selectRecentEmojis } from '../utils/emojiRecents';
+import { isSpeechToTextReady, transcribeSpeechBlob } from '../utils/speechTranscriptionApi';
 
 const CollaborationWindow = React.lazy(() => import('../features/collaboration/CollaborationWindow'));
 
@@ -191,6 +197,10 @@ const Chat: React.FC = () => {
     const [characterPhotoBusy, setCharacterPhotoBusy] = useState(false);
     const [characterPhotoInitialNote, setCharacterPhotoInitialNote] = useState('');
     const [chatModelSwitcherOpen, setChatModelSwitcherOpen] = useState(false);
+    const [showConversationList, setShowConversationList] = useState(() => consumeChatEntryAsList());
+    const [selectedImageMessage, setSelectedImageMessage] = useState<Message | null>(null);
+    const [regeneratingImageId, setRegeneratingImageId] = useState<number | null>(null);
+    const [voiceMessageSending, setVoiceMessageSending] = useState(false);
     const contextualImageProcessingRef = useRef(new Set<number>());
     
     // Emoji State
@@ -199,6 +209,7 @@ const Chat: React.FC = () => {
     const [activeCategory, setActiveCategory] = useState<string>('default');
     const [newCategoryName, setNewCategoryName] = useState('');
     const [newEmojiName, setNewEmojiName] = useState(''); // 表情包重命名输入框
+    const [recentEmojiNames, setRecentEmojiNames] = useState<string[]>(() => loadRecentEmojiNames());
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const lastMsgIdRef = useRef<number | null>(null);
@@ -1488,11 +1499,13 @@ const Chat: React.FC = () => {
             })
             : null;
 
+        const explicitPhotoRequest = type === 'text' && isCharacterPhotoRequestText(text);
         const contextualImageMeta = type === 'text' && apiConfig.imageGenApi?.enabled
             ? {
                 contextualImage: {
                     status: 'pending',
                     turnId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    requested: explicitPhotoRequest,
                 },
             }
             : {};
@@ -1516,6 +1529,10 @@ const Chat: React.FC = () => {
         }
 
         const savedUserMsgId = await DB.saveMessage(msgPayload);
+
+        if (explicitPhotoRequest && !apiConfig.imageGenApi?.enabled) {
+            addToast('已发送文字；要让角色附图，请先到设置开启生图 API', 'info');
+        }
 
         if (type === 'image') {
             // 相册是消息的附带记录：保留来源消息引用供收藏/去重使用，但相册写入失败
@@ -1684,7 +1701,7 @@ const Chat: React.FC = () => {
         // 否则保留手动 ⚡（避免"启用 instant = 自动回复"的反直觉强绑定）。
         const instantCfg = loadInstantConfig();
         // 新的「发完后自动生成」接管等待；不要再从旧开关立即触发一遍。
-        if (!inputPreferences.autoReply && type === 'text' && isInstantConfigReady(instantCfg) && instantCfg.autoTriggerOnSend) {
+        if (!inputPreferences.autoReply && (type === 'text' || type === 'voice') && isInstantConfigReady(instantCfg) && instantCfg.autoTriggerOnSend) {
             // 上一轮还在跑时直接跳过：triggerAI 内部会因 isTyping=true 静默 reject，
             // 提前 guard 避免点亮"准备中"指示灯后没人来清，UI 灯被卡住。
             if (isTyping) return;
@@ -1699,7 +1716,7 @@ const Chat: React.FC = () => {
         const finish = autoReply.beginSend(char?.id || null);
         try {
             const sent = await sendText(customContent, customType, metadata);
-            finish(sent === true && (!customType || ['text', 'image', 'emoji'].includes(customType)));
+            finish(sent === true && (!customType || ['text', 'image', 'emoji', 'voice'].includes(customType)));
         } catch (error) {
             finish(false);
             throw error;
@@ -1798,6 +1815,103 @@ const Chat: React.FC = () => {
         } finally {
             // 是否真正发出由 handleSendText 标记；这里仅解除图片处理期间的暂停。
             finishImage(false);
+        }
+    };
+
+    const handleVoiceRecorded = async (blob: Blob, durationMs: number) => {
+        if (!char || voiceMessageSending) return;
+        if (!isSpeechToTextReady(apiConfig)) {
+            addToast('请先到设置 → STT 语音转文字完成配置', 'info');
+            return;
+        }
+        setVoiceMessageSending(true);
+        try {
+            const transcript = await transcribeSpeechBlob(blob, apiConfig);
+            const audioRef = await putBlobRef(blob);
+            await handleSendText(audioRef, 'voice', {
+                transcript,
+                durationMs,
+                mimeType: blob.type || 'audio/webm',
+                source: 'user_voice',
+            });
+            addToast('语音已发送', 'success');
+        } catch (error: any) {
+            console.error('[Chat] voice transcription failed', error);
+            addToast(error?.message || '语音转文字失败，请重试或检查 STT 设置', 'error');
+        } finally {
+            setVoiceMessageSending(false);
+        }
+    };
+
+    const handleSaveChatImage = async (message: Message) => {
+        try {
+            const blob = isBlobRef(message.content)
+                ? await getBlobForRef(message.content)
+                : await fetchBlobForShare(message.content, 'image/jpeg');
+            if (!blob) throw new Error('图片文件不存在');
+            const extension = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+            const result = await shareOrDownloadBlob({
+                blob,
+                fileName: `${char?.name || 'chat'}-${message.id}.${extension}`,
+                shareTitle: '保存聊天图片',
+                preferDownloadOnWeb: true,
+            });
+            if (result !== 'cancelled') addToast(result === 'downloaded' ? '图片已下载' : '已打开系统保存面板', 'success');
+        } catch (error: any) {
+            addToast(error?.message || '图片保存失败', 'error');
+        }
+    };
+
+    const handleRegenerateChatImage = async (message: Message) => {
+        if (!char || regeneratingImageId !== null) return;
+        const prompt = typeof message.metadata?.prompt === 'string' ? message.metadata.prompt.trim() : '';
+        if (!prompt) {
+            addToast('这张图片没有可复用的生成提示词', 'info');
+            return;
+        }
+        setRegeneratingImageId(message.id);
+        try {
+            const [image] = await generateCharacterPhotos({ prompt, char, messages, apiConfig, count: 1, surface: 'chat' });
+            if (!image) throw new Error('图片接口没有返回结果');
+            let stored = image.startsWith('data:') ? await migrateDataUrlToRef(image) : image;
+            if (/^https?:\/\//i.test(image)) {
+                try {
+                    const response = await fetch(image);
+                    if (response.ok) stored = await putImageBlob(await response.blob());
+                } catch { /* 保留远端 URL */ }
+            }
+            const sourceMessageId = await DB.saveMessage({
+                charId: char.id,
+                role: 'assistant',
+                type: 'image',
+                content: stored,
+                metadata: {
+                    ...message.metadata,
+                    source: 'regenerated_character_photo',
+                    regeneratedFrom: message.id,
+                    prompt,
+                },
+            });
+            try {
+                await DB.saveGalleryImage({
+                    id: `img-${Date.now()}-${Math.random()}`,
+                    charId: char.id,
+                    url: stored,
+                    timestamp: Date.now(),
+                    sourceMessageId,
+                    savedDate: localDateKey,
+                });
+            } catch (galleryError) {
+                console.warn('[Chat] 重生图片存相册失败，聊天图片已保留', galleryError);
+            }
+            markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
+            await reloadMessages(visibleCountRef.current);
+            setSelectedImageMessage(null);
+            addToast('已重新生成一张图片', 'success');
+        } catch (error: any) {
+            addToast(error?.message || '重新生成失败，原图片和聊天记录未受影响', 'error');
+        } finally {
+            setRegeneratingImageId(null);
         }
     };
 
@@ -1901,6 +2015,7 @@ const Chat: React.FC = () => {
             .slice(previousAssistantIndex + 1, userIndex + 1)
             .filter(message => message.role === 'user' && message.metadata?.contextualImage?.status === 'pending');
         const pendingIds = pendingTurnUsers.map(message => message.id);
+        const forceImage = pendingTurnUsers.some(message => message.metadata?.contextualImage?.requested === true || isCharacterPhotoRequestText(message.content));
         contextualImageProcessingRef.current.add(anchor.id);
 
         void (async () => {
@@ -1918,12 +2033,24 @@ const Chat: React.FC = () => {
             try {
                 await setTurnStatus('processing');
                 const promptMessages = messages.slice(Math.max(0, previousAssistantIndex + 1));
-                const plan = await planContextualChatImage({
-                    char,
-                    user: userProfile,
-                    messages: promptMessages,
-                    apiConfig,
-                });
+                let plan;
+                try {
+                    plan = await planContextualChatImage({
+                        char,
+                        user: userProfile,
+                        messages: promptMessages,
+                        apiConfig,
+                        forceImage,
+                    });
+                } catch (planningError) {
+                    if (!forceImage) throw planningError;
+                    // 明确要照片时，规划模型临时失败也不能把强制请求降级成纯文字。
+                    plan = {
+                        sendImage: true,
+                        mode: 'free' as CharacterPhotoMode,
+                        scene: `根据用户刚才明确提出的照片请求，生成 ${char.name} 此刻自然拍下并发给用户的一张真实生活照片。`,
+                    };
+                }
                 if (!plan.sendImage) {
                     await setTurnStatus('done', 'text_only');
                     return;
@@ -1985,11 +2112,12 @@ const Chat: React.FC = () => {
             } catch (error) {
                 console.warn('[Chat] contextual image generation failed; kept text-only reply', error);
                 await setTurnStatus('failed', 'text_only').catch(() => undefined);
+                if (forceImage) addToast('照片生成失败，文字回复和聊天记录已保留；可以稍后重试', 'error');
             } finally {
                 contextualImageProcessingRef.current.delete(anchor.id);
             }
         })();
-    }, [apiConfig, char, groups, instantChatPending, isTyping, localDateKey, messages, realtimeConfig, reloadMessages, userProfile]);
+    }, [apiConfig, char, groups, instantChatPending, isTyping, localDateKey, messages, realtimeConfig, reloadMessages, userProfile, addToast]);
 
     const handlePanelAction = (type: string, payload?: any) => {
         // 只统计「打开某个面板 / 开关某个能力」这几个固定入口，名单写死在这里；
@@ -2021,7 +2149,12 @@ const Chat: React.FC = () => {
             case 'chrome-sound': setShowPanel('none'); setDecorationTab('sound'); setModalType('chrome-css'); break;
             case 'fine-tune': setShowPanel('none'); setDecorationTab('layout'); setModalType('chrome-css'); break;
             case 'emoji-import': setModalType('emoji-import'); break;
-            case 'send-emoji': if (payload) handleSendText(payload.url, 'emoji'); break;
+            case 'send-emoji':
+                if (payload) {
+                    setRecentEmojiNames(recordRecentEmoji(payload.name));
+                    handleSendText(payload.url, 'emoji');
+                }
+                break;
             case 'delete-emoji-req': setSelectedEmoji(payload); setModalType('delete-emoji'); break;
             case 'emoji-options': setSelectedEmoji(payload); setModalType('emoji-options'); break;
             case 'add-category': setModalType('add-category'); break;
@@ -3698,10 +3831,10 @@ const Chat: React.FC = () => {
     }, [visibleCategories, activeCategory]);
 
     // Suggestions span all visible categories; the picker still uses its selected tab.
-    const filteredEmojis = useMemo(() => aiVisibleEmojis.filter(e => {
-        if (activeCategory === 'default') return !e.categoryId || e.categoryId === 'default';
-        return e.categoryId === activeCategory;
-    }), [aiVisibleEmojis, activeCategory]);
+    const filteredEmojis = useMemo(() => {
+        if (activeCategory === 'default') return selectRecentEmojis(aiVisibleEmojis, recentEmojiNames);
+        return aiVisibleEmojis.filter(e => e.categoryId === activeCategory);
+    }, [aiVisibleEmojis, activeCategory, recentEmojiNames]);
 
     // Memoize ChatInputArea callbacks
     const handleSendCallback = useCallback(() => handleSendText(), [char, input, replyTarget, inputPreferences]);
@@ -3709,11 +3842,11 @@ const Chat: React.FC = () => {
     const autoReply = useChatAutoReply({
         enabled: inputPreferences.autoReply,
         conversationId: activeCharacterId || null,
-        active: activeApp === AppID.Chat && !!char,
+        active: activeApp === AppID.Chat && !!char && !showConversationList,
         blocked: isInputFocused || !!input.trim() || showPanel !== 'none' || modalType !== 'none'
             || selectionMode || isSummarizing || collaborationOpen || memoryRepairOpen || favoritesOpen
             || showProactiveModal || showActiveMsg2Modal || showThinkingChainModal || characterPhotoOpen || characterPhotoBusy
-            || mcdAppOpen || luckinAppOpen || showForwardModal,
+            || mcdAppOpen || luckinAppOpen || showForwardModal || showConversationList,
         generating: isTyping || instantChatPending || isProactiveComposing,
         onGenerate: handleManualTrigger,
     });
@@ -3796,6 +3929,21 @@ const Chat: React.FC = () => {
     const chatAvatarSizeClass = osTheme.chatAvatarSize === 'small' ? 'w-7 h-7' : osTheme.chatAvatarSize === 'large' ? 'w-12 h-12' : 'w-9 h-9';
     const chatAvatarRadiusClass = osTheme.chatAvatarShape === 'square' ? 'rounded-sm' : osTheme.chatAvatarShape === 'rounded' ? 'rounded-xl' : 'rounded-full';
     const chatPendingAvatarClass = `${chatAvatarSizeClass} ${chatAvatarRadiusClass} object-cover`;
+
+    if (showConversationList) {
+        return (
+            <ChatConversationList
+                characters={characters}
+                unreadMessages={unreadMessages}
+                lastMsgTimestamp={lastMsgTimestamp}
+                onClose={closeApp}
+                onSelect={(id) => {
+                    setActiveCharacterId(id);
+                    setShowConversationList(false);
+                }}
+            />
+        );
+    }
 
     return (
         <div
@@ -4157,7 +4305,7 @@ const Chat: React.FC = () => {
                 memoryPalaceStatusText={memoryPalaceStatus}
                 lastTokenUsage={lastTokenUsage}
                 tokenBreakdown={tokenBreakdown}
-                onClose={closeApp}
+                onClose={() => setShowConversationList(true)}
                 onTriggerAI={handleManualTrigger}
                 hideTrigger={inputPreferences.sendButtonGenerates}
                 onShowCharsPanel={() => setShowPanel('chars')}
@@ -4388,6 +4536,7 @@ const Chat: React.FC = () => {
                             userAvatar={userProfile.perCharAvatars?.[char.id] || userProfile.avatar}
                             isLatestMessage={!nextMessage}
                             onMediaLoad={handleMessageMediaLoad}
+                            onOpenImage={setSelectedImageMessage}
                             moduleAlign={mergedFineTune.chatModuleAlign || 'center'}
                             onLongPress={handleMessageLongPress}
                             onReply={handleQuickReply}
@@ -4650,6 +4799,10 @@ const Chat: React.FC = () => {
                     onRemoveTheme={removeCustomTheme} activeThemeId={currentThemeId}
                     onPanelAction={handlePanelAction}
                     onImageSelect={handleImageSelect}
+                    onVoiceRecorded={handleVoiceRecorded}
+                    onVoiceError={(message) => addToast(message, 'info')}
+                    voiceConfigured={isSpeechToTextReady(apiConfig)}
+                    voiceSending={voiceMessageSending}
                     isSummarizing={isSummarizing}
                     categories={visibleCategories}
                     activeCategory={activeCategory}
@@ -4667,6 +4820,15 @@ const Chat: React.FC = () => {
                     chromeStyle={osTheme.chatChromeStyle}
                     acnh={acnh}
                 />
+                {selectedImageMessage && (
+                    <ChatImageViewer
+                        message={selectedImageMessage}
+                        onClose={() => setSelectedImageMessage(null)}
+                        onSave={handleSaveChatImage}
+                        onRegenerate={selectedImageMessage.role === 'assistant' && typeof selectedImageMessage.metadata?.prompt === 'string' ? handleRegenerateChatImage : undefined}
+                        regenerating={regeneratingImageId === selectedImageMessage.id}
+                    />
+                )}
             </div>
 
 
