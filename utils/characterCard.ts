@@ -31,6 +31,7 @@ export const CARD_STRIPPED_FIELDS = [
   'chatSound',
   'chatSoundBound',
   'chatBackground',
+  'chatModelOverride',       // 本机会话选择，且预设 id / 模型列表在接收方不一定存在
   'dateBackground',
   'thinkingChainStyle',
   'thinkingChainCustomColors',
