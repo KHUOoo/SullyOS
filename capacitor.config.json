@@ -1,10 +1,15 @@
 {
-  "appId": "com.aetheros.simulator",
-  "appName": "SullyOS·糯米机",
+  "appId": "com.khuooo.sullyos",
+  "appName": "SullyOS",
   "webDir": "dist",
   "server": {
     "androidScheme": "https",
-    "cleartext": true
+    "cleartext": true,
+    "allowNavigation": [
+      "api.github.com",
+      "github.com",
+      "objects.githubusercontent.com"
+    ]
   },
   "plugins": {
     "SplashScreen": {

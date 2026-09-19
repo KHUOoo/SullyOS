@@ -103,17 +103,30 @@ npm run dev
 ## 打包成安卓 App（变成真·手机应用）
 
 ```bash
-# 1. 构建前端
-npm run build
+# 构建 Android Web 资源并同步原生工程
+pnpm run android:sync
 
-# 2. 同步到 Capacitor
-npm run cap:sync
+# 生成可直接安装的 Debug APK
+cd android && ./gradlew assembleDebug
 
-# 3. 打开 Android Studio
-npm run cap:android
+# 或打开 Android Studio 调试
+pnpm run cap:android
 ```
 
-然后在 Android Studio 里点播放按钮，或者 Build → Generate Signed Bundle 生成 APK。草，终于能装在真手机上了。
+Android 工程位于 `android/`，固定 App ID 为 `com.khuooo.sullyos`。Debug APK 在
+`android/app/build/outputs/apk/debug/app-debug.apk`。同一个 App ID、同一份签名证书覆盖安装时，
+WebView 的 localStorage / IndexedDB 会保留；不要卸载 App 或在系统设置里清除数据。
+
+正式发布由 `.github/workflows/android-release.yml` 处理：推送 `v1.0.1` 这类 Tag 后自动构建、签名并上传
+`SullyOS-v1.0.1.apk` 到 GitHub Release。首次发布前需在仓库 Actions Secrets 配置：
+
+- `ANDROID_KEYSTORE`：release keystore 文件的单行 Base64
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+keystore 只创建一次并离线备份，绝不能提交到 Git。详细流程见
+[`docs/android-release.md`](./docs/android-release.md)。
 
 ## 数据存储在哪？（你的秘密安全吗）
 

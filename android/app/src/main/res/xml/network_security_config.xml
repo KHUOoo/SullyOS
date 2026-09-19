@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- SullyOS primarily uses HTTPS. Cleartext remains enabled by the Capacitor
+         config for user-configured LAN/self-hosted AI endpoints. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

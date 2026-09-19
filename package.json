@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "pnpm run build:workers && vite build",
+    "build:android:web": "pnpm run build:workers && CAPACITOR_BUILD=1 vite build --mode capacitor",
+    "android:sync": "pnpm run build:android:web && cap sync android",
+    "android:debug": "pnpm run android:sync && node scripts/set-android-version.mjs && cd android && ./gradlew assembleDebug",
     "build:capacitor": "powershell -ExecutionPolicy Bypass -File scripts/sync-tiao-capacitor.ps1",
     "preview": "vite preview",
     "cap:sync": "cap sync",

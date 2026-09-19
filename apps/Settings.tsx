@@ -2,6 +2,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { Capacitor } from '@capacitor/core';
+import { APP_UPDATE_CHECK_EVENT } from '../utils/appUpdate';
+import { isNativeAndroid } from '../utils/sullyNative';
 import { extractContent, safeResponseJson } from '../utils/safeApi';
 import { extractModelIds, normalizeModelIds } from '../utils/modelList';
 import { shareOrDownloadBlob } from '../utils/shareExport';
@@ -484,7 +486,7 @@ const Settings: React.FC = () => {
       // 改工具凭据时要连云端提示词一起刷（见 syncAmsgToolConfigAndPrompts）
       characters, groups, userProfile,
       cloudBackupConfig, updateCloudBackupConfig,
-      cloudBackupToWebDAV, cloudRestoreFromWebDAV, listCloudBackups,
+      cloudBackupToWebDAV, cloudRestoreFromWebDAV, listCloudBackups, registerBackHandler,
   } = useOS();
   
   const [localKey, setLocalKey] = useState(apiConfig.apiKey);
@@ -738,6 +740,37 @@ const Settings: React.FC = () => {
   const [showInstantModal, setShowInstantModal] = useState(false);
   const [showAmsg2Modal, setShowAmsg2Modal] = useState(false);
   const [showVapidModal, setShowVapidModal] = useState(false);
+
+  useEffect(() => registerBackHandler(() => {
+      const closers: Array<[boolean, () => void]> = [
+          [showMcpHelp, () => setShowMcpHelp(false)],
+          [showCloudRestoreModal, () => setShowCloudRestoreModal(false)],
+          [showVapidModal, () => setShowVapidModal(false)],
+          [showAmsg2Modal, () => setShowAmsg2Modal(false)],
+          [showInstantModal, () => setShowInstantModal(false)],
+          [showPpConfirm, () => setShowPpConfirm(false)],
+          [showGithubModal, () => setShowGithubModal(false)],
+          [showCloudModal, () => setShowCloudModal(false)],
+          [showMcpModal, () => setShowMcpModal(false)],
+          [showRealtimeModal, () => setShowRealtimeModal(false)],
+          [showApiCallLog, () => setShowApiCallLog(false)],
+          [showPresetModal, () => setShowPresetModal(false)],
+          [showResetConfirm, () => setShowResetConfirm(false)],
+          [showExportModal, () => setShowExportModal(false)],
+          [showVisionModelModal, () => setShowVisionModelModal(false)],
+          [showModelModal, () => setShowModelModal(false)],
+          [showProxyConfig, () => setShowProxyConfig(false)],
+      ];
+      const active = closers.find(([visible]) => visible);
+      if (!active) return false;
+      active[1]();
+      return true;
+  }), [
+      registerBackHandler, showMcpHelp, showCloudRestoreModal, showVapidModal, showAmsg2Modal,
+      showInstantModal, showPpConfirm, showGithubModal, showCloudModal, showMcpModal,
+      showRealtimeModal, showApiCallLog, showPresetModal, showResetConfirm, showExportModal,
+      showVisionModelModal, showModelModal, showProxyConfig,
+  ]);
   const [vapidReadyTick, setVapidReadyTick] = useState(0); // 关闭 VAPID 弹窗后刷新顶层徽标
 
   // 模型选择 Modal 的过滤 + 公共前缀（memo 掉，避免每次 Settings 重渲染都重算）
@@ -3569,6 +3602,21 @@ const Settings: React.FC = () => {
             </div>
         </SettingsSection>
         )}
+
+        <SettingsSection
+            title="App 更新"
+            icon={<div className="p-2 bg-sky-100 rounded-xl text-sky-700">↻</div>}
+            badge={isNativeAndroid() ? <span className="text-[9px] rounded-full bg-emerald-100 px-2 py-1 font-bold text-emerald-700">Android</span> : undefined}
+        >
+            <p className="text-xs leading-relaxed text-slate-500">从 GitHub Release 检查稳定版 APK。安装新版时只覆盖程序，不会清空角色、聊天、记忆或 API 设置。</p>
+            <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event(APP_UPDATE_CHECK_EVENT))}
+                className="mt-3 w-full rounded-xl bg-sky-600 px-4 py-3 text-xs font-bold text-white active:scale-[.98]"
+            >
+                检查更新
+            </button>
+        </SettingsSection>
 
         <VersionInfo />
 

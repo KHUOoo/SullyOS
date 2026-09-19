@@ -73,6 +73,7 @@ import { setCharNameRegistry } from '../utils/charNameRegistry';
 import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setElevenLabsModel, setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { popNavigationEntry, pushNavigationEntry } from '../utils/navigationStack';
 import { Capacitor } from '@capacitor/core';
 import { formatBytes } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
@@ -432,7 +433,8 @@ interface OSContextType {
 
   // Navigation Logic
   registerBackHandler: (handler: () => boolean) => () => void; // Returns unregister function
-  handleBack: () => void;
+  /** Returns true when SullyOS consumed the back action. */
+  handleBack: () => boolean;
 
   // Call Suspend
   suspendedCall: { charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string; pendingAvatarTouches?: AvatarTouchRecord[] } | null;
@@ -988,8 +990,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const interceptorsInitialized = useRef(false);
   
-  // Back Handler Ref
-  const backHandlerRef = useRef<(() => boolean) | null>(null);
+  // Back handlers form a stack so a nested sheet can temporarily take priority
+  // without overwriting the page-level handler below it.
+  const backHandlerRefs = useRef<Array<() => boolean>>([]);
+  const appHistoryRef = useRef<AppID[]>([]);
 
   // Call Suspend
   const [suspendedCall, setSuspendedCall] = useState<{ charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string; pendingAvatarTouches?: AvatarTouchRecord[] } | null>(null);
@@ -1807,6 +1811,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const activeCharIdScheduleRef = useRef(activeCharacterId);
   activeAppRef.current = activeApp;
   activeCharIdScheduleRef.current = activeCharacterId;
+  const navigateApp = useCallback((appId: AppID, rememberCurrent = true) => {
+      const current = activeAppRef.current;
+      if (current === appId) return;
+      if (rememberCurrent) pushNavigationEntry(appHistoryRef.current, current, appId);
+      activeAppRef.current = appId;
+      setActiveApp(appId);
+  }, []);
 
   // 当前聊天视图快照 → 模块级 slot（utils/chatGenEvents）。根级 ChatBroadcast 挂在
   // OSProvider 之外拿不到这两个 state，靠快照判断"用户正看着的会话不弹全局横幅"。
@@ -1870,7 +1881,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                                   });
                                   notif.onclick = () => {
                                       window.focus();
-                                      setActiveApp(AppID.Chat);
+                                      navigateApp(AppID.Chat);
                                       setActiveCharacterId(char.id);
                                   };
                               } catch (e) { /* notification failed */ }
@@ -1993,7 +2004,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const openHandler = (e: Event) => {
           const { charId } = (e as CustomEvent).detail as { charId?: string };
           if (!charId) return;
-          setActiveApp(AppID.Chat);
+          navigateApp(AppID.Chat);
           setActiveCharacterId(charId);
       };
 
@@ -5218,23 +5229,30 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   };
 
   const resetSystem = async () => { try { await DB.deleteDB(); localStorage.clear(); window.location.reload(); } catch (e) { console.error(e); addToast('重置失败，请手动清除浏览器数据', 'error'); } };
-  const openApp = (appId: AppID) => setActiveApp(appId);
-  const closeApp = () => setActiveApp(AppID.Launcher);
+  const openApp = navigateApp;
+  const closeApp = useCallback(() => {
+    const current = activeAppRef.current;
+    const target = popNavigationEntry(appHistoryRef.current, current, AppID.Launcher);
+    activeAppRef.current = target;
+    setActiveApp(target);
+  }, []);
   // 从聊天直接进入某角色的见面：切换当前角色 + 标记自动进入 + 打开见面 App
   const openDateWithChar = (charId: string) => {
     setActiveCharacterId(charId);
     setDateAutoStartCharId(charId);
-    setActiveApp(AppID.Date);
+    openApp(AppID.Date);
   };
   const consumeDateAutoStart = () => setDateAutoStartCharId(null);
   const unlock = () => setIsLocked(false);
 
   const suspendCall = (info: { charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string; pendingAvatarTouches?: AvatarTouchRecord[] }) => {
     setSuspendedCall(info);
+    appHistoryRef.current = [];
+    activeAppRef.current = AppID.Launcher;
     setActiveApp(AppID.Launcher);
   };
   const resumeCall = () => {
-    setActiveApp(AppID.Call);
+    openApp(AppID.Call);
   };
   const clearSuspendedCall = () => {
     setSuspendedCall(null);
@@ -5242,24 +5260,23 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
   // --- Back Handler Logic ---
   const registerBackHandler = useCallback((handler: () => boolean) => {
-      backHandlerRef.current = handler;
+      backHandlerRefs.current.push(handler);
       return () => {
-          if (backHandlerRef.current === handler) {
-              backHandlerRef.current = null;
-          }
+          backHandlerRefs.current = backHandlerRefs.current.filter(item => item !== handler);
       };
   }, []);
 
   const handleBack = useCallback(() => {
-      if (backHandlerRef.current) {
-          const handled = backHandlerRef.current();
-          if (handled) return;
+      const handlers = [...backHandlerRefs.current].reverse();
+      for (const handler of handlers) {
+          if (handler()) return true;
       }
-      // Default: Close App
-      if (activeApp !== AppID.Launcher) {
+      if (activeAppRef.current !== AppID.Launcher) {
           closeApp();
+          return true;
       }
-  }, [activeApp, closeApp]);
+      return false;
+  }, [closeApp]);
 
   const value: OSContextType = {
     activeApp,

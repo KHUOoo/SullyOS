@@ -112,6 +112,7 @@ import { App as CapApp } from '@capacitor/app';
 import { StatusBar as CapStatusBar, Style as StatusBarStyle } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
+import { Keyboard } from '@capacitor/keyboard';
 import { isIOSStandaloneWebApp, resolveStatusBarMode } from '../utils/iosStandalone';
 import AppErrorBoundary from './os/AppErrorBoundary';
 import GlobalMiniPlayer from './os/GlobalMiniPlayer';
@@ -121,6 +122,7 @@ import ErrorDialog from './os/ErrorDialog';
 import BootSequence from './os/BootSequence';
 import { setAppPayloadWarmer, shouldUseIdleAppPreload } from './os/appPreload';
 import { isBrowserBackGuardState, makeBrowserBackGuardState } from '../utils/browserBackGuard';
+import AppUpdateController from './os/AppUpdateController';
 
 /*
 // Internal Error Boundary Component
@@ -454,6 +456,7 @@ const AppLoadingFallback: React.FC<{ onReturn?: () => void; animationEnabled?: b
 const PhoneShell: React.FC = () => {
   const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError } = useOS();
   const useIOSStandaloneLayout = isIOSStandaloneWebApp();
+  const nativeKeyboardVisibleRef = useRef(false);
 
   // 三档顶部状态栏：安全显示 / 紧凑显示 / 隐藏。旧存档仍由 hideStatusBar 兼容解析。
   // compact 把时间放进 safe-area，本体顶栏只让出 max(safe-area, 1.5rem)，避免顶部再多一整行。
@@ -808,17 +811,30 @@ const PhoneShell: React.FC = () => {
     initNative();
 
     // Handle Android Hardware Back Button
+    let disposed = false;
+    const nativeListenerHandles: Array<{ remove: () => Promise<void> }> = [];
     const setupBackButton = async () => {
         if (Capacitor.isNativePlatform()) {
             try {
-                await CapApp.removeAllListeners();
-                CapApp.addListener('backButton', ({ canGoBack }) => {
-                    if (isLocked) {
-                        CapApp.exitApp();
-                    } else {
-                        handleBack(); // Delegate to OSContext logic
+                nativeListenerHandles.push(await Keyboard.addListener('keyboardDidShow', () => {
+                    nativeKeyboardVisibleRef.current = true;
+                }));
+                nativeListenerHandles.push(await Keyboard.addListener('keyboardDidHide', () => {
+                    nativeKeyboardVisibleRef.current = false;
+                }));
+                nativeListenerHandles.push(await CapApp.addListener('backButton', () => {
+                    if (nativeKeyboardVisibleRef.current) {
+                        void Keyboard.hide();
+                        return;
                     }
-                });
+                    if (isLocked) {
+                        void CapApp.exitApp();
+                    } else {
+                        const handled = handleBack();
+                        if (!handled) void CapApp.exitApp();
+                    }
+                }));
+                if (disposed) await Promise.all(nativeListenerHandles.map(handle => handle.remove()));
             } catch (e) { console.log('Back button listener setup failed'); }
         }
     };
@@ -826,11 +842,10 @@ const PhoneShell: React.FC = () => {
     setupBackButton();
 
     return () => {
-        if (Capacitor.isNativePlatform()) {
-            CapApp.removeAllListeners().catch(() => {});
-        }
+        disposed = true;
+        void Promise.all(nativeListenerHandles.map(handle => handle.remove().catch(() => {})));
     };
-  }, [activeApp, isLocked, closeApp, handleBack]);
+  }, [isLocked, handleBack]);
 
   // Force scroll to top when app changes to prevent "push up" glitches on iOS
   useEffect(() => {
@@ -1110,6 +1125,8 @@ const PhoneShell: React.FC = () => {
          details={errorDialog?.details ?? ''}
          onClose={dismissError}
        />
+
+       <AppUpdateController />
 
        {/* First-time disclaimer popup */}
        {!anniversaryBlocked && !isLocked && showAnniversaryGift && (
