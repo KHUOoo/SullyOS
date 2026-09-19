@@ -1,0 +1,33 @@
+name: Bootstrap Android Changes
+
+on:
+  push:
+    branches:
+      - codex/android-app
+    paths:
+      - sullyos-android.patch
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply reviewed Android patch
+        run: git am sullyos-android.patch
+
+      - name: Remove bootstrap files
+        run: |
+          git rm sullyos-android.patch .github/workflows/bootstrap-android.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: remove Android bootstrap files"
+          git push origin HEAD:codex/android-app
