@@ -888,6 +888,28 @@ export const DB = {
     });
   },
 
+  updateMessageContentAndMetadata: async (id: number, content: string, metadata: any): Promise<void> => {
+    const db = await openDB();
+    const transaction = db.transaction(STORE_MESSAGES, 'readwrite');
+    const store = transaction.objectStore(STORE_MESSAGES);
+    return new Promise((resolve, reject) => {
+      const request = store.get(id);
+      request.onsuccess = () => {
+        const message = request.result as Message | undefined;
+        if (!message) {
+          transaction.abort();
+          reject(new Error('Message not found'));
+          return;
+        }
+        store.put({ ...message, content, metadata });
+      };
+      request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('updateMessageContentAndMetadata transaction aborted'));
+    });
+  },
+
   getMessageById: async (id: number): Promise<Message | null> => {
     const db = await openDB();
     return new Promise((resolve, reject) => {

@@ -16,7 +16,13 @@ const ChatImageViewer: React.FC<Props> = ({ message, onClose, onSave, onRegenera
       <span className="text-xs text-white/60">图片预览</span>
       <button type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-2xl">×</button>
     </div>
-    <div className="flex min-h-0 flex-1 items-center justify-center p-4" onClick={event => event.stopPropagation()}>
+    <div
+      className="flex min-h-0 flex-1 cursor-zoom-out items-center justify-center p-4"
+      onClick={event => {
+        event.stopPropagation();
+        onClose();
+      }}
+    >
       <TokenImg value={message.content} alt="聊天图片大图" className="max-h-full max-w-full object-contain" />
     </div>
     <div className="flex shrink-0 justify-center gap-3 px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3" onClick={event => event.stopPropagation()}>

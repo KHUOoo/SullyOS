@@ -7,6 +7,7 @@ import { AcnhActionTile } from '../os/acnhIcons';
 import { isIOSStandaloneWebApp } from '../../utils/iosStandalone';
 import { trackEvent } from '../../utils/analytics';
 import { findEmojiSuggestions } from '../../utils/emojiSuggestions';
+import { isNativeAndroid, requestAndroidMicrophonePermission } from '../../utils/sullyNative';
 
 const EMOJI_PAGE_SIZE = 40;
 const ACTION_PAGE_SIZE = 8;
@@ -164,6 +165,10 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
             return;
         }
         try {
+            if (isNativeAndroid() && !(await requestAndroidMicrophonePermission())) {
+                onVoiceError?.('没有麦克风权限，请到系统设置中允许 SullyOS 使用麦克风');
+                return;
+            }
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const recorder = new MediaRecorder(stream);
             const chunks: BlobPart[] = [];
@@ -191,7 +196,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
             setIsRecordingVoice(true);
         } catch (error: any) {
             mediaStreamRef.current?.getTracks().forEach(track => track.stop());
-            onVoiceError?.(error?.name === 'NotAllowedError' ? '没有麦克风权限，请在浏览器设置中允许录音' : '无法开始录音');
+            onVoiceError?.(error?.name === 'NotAllowedError' ? '没有麦克风权限，请在系统或浏览器设置中允许录音' : '无法开始录音');
         }
     };
 

@@ -140,6 +140,7 @@ import {
 import { consumeChatEntryAsList } from '../utils/chatEntry';
 import { loadRecentEmojiNames, recordRecentEmoji, selectRecentEmojis } from '../utils/emojiRecents';
 import { isSpeechToTextReady, transcribeSpeechBlob } from '../utils/speechTranscriptionApi';
+import { isNativeAndroid, saveImageToAndroidGallery } from '../utils/sullyNative';
 
 const CollaborationWindow = React.lazy(() => import('../features/collaboration/CollaborationWindow'));
 
@@ -157,7 +158,7 @@ type InstantToolUiStatus = {
 };
 
 const Chat: React.FC = () => {
-    const { activeApp, characters, activeCharacterId, setActiveCharacterId, addCharacter, updateCharacter, updateUserProfile, apiConfig, apiPresets, availableModels, addApiPreset, closeApp, openApp, customThemes, addCustomTheme, removeCustomTheme, addWorldbook, updateTheme, saveAppearancePreset, addToast, showError, userProfile, lastMsgTimestamp, groups, characterGroups, clearUnread, unreadMessages, realtimeConfig, memoryPalaceConfig, updateMemoryPalaceConfig, remoteVectorConfig, syncEmotionApiToAllCharacters, theme: baseOsTheme, proactiveComposingChars, openDateWithChar } = useOS();
+    const { activeApp, characters, activeCharacterId, setActiveCharacterId, addCharacter, updateCharacter, updateUserProfile, apiConfig, apiPresets, availableModels, addApiPreset, closeApp, openApp, customThemes, addCustomTheme, removeCustomTheme, addWorldbook, updateTheme, saveAppearancePreset, addToast, showError, userProfile, lastMsgTimestamp, groups, characterGroups, clearUnread, unreadMessages, realtimeConfig, memoryPalaceConfig, updateMemoryPalaceConfig, remoteVectorConfig, syncEmotionApiToAllCharacters, theme: baseOsTheme, proactiveComposingChars, openDateWithChar, registerBackHandler } = useOS();
     const osTheme = useMemo(()=>resolveDecorationTheme(baseOsTheme,characters.find(c=>c.id===activeCharacterId)||characters[0]),[baseOsTheme,characters,activeCharacterId]);
     const isProactiveComposing = !!(activeCharacterId && proactiveComposingChars[activeCharacterId]);
     const localDateKey = useLocalDateKey();
@@ -1850,9 +1851,15 @@ const Chat: React.FC = () => {
                 : await fetchBlobForShare(message.content, 'image/jpeg');
             if (!blob) throw new Error('图片文件不存在');
             const extension = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+            const fileName = `${char?.name || 'chat'}-${message.id}.${extension}`;
+            if (isNativeAndroid()) {
+                await saveImageToAndroidGallery(blob, fileName);
+                addToast('图片已保存到系统相册', 'success');
+                return;
+            }
             const result = await shareOrDownloadBlob({
                 blob,
-                fileName: `${char?.name || 'chat'}-${message.id}.${extension}`,
+                fileName,
                 shareTitle: '保存聊天图片',
                 preferDownloadOnWeb: true,
             });
@@ -1871,7 +1878,21 @@ const Chat: React.FC = () => {
         }
         setRegeneratingImageId(message.id);
         try {
-            const [image] = await generateCharacterPhotos({ prompt, char, messages, apiConfig, count: 1, surface: 'chat' });
+            const snapshot = message.metadata?.imageGenSnapshot;
+            const retryApiConfig = snapshot && apiConfig.imageGenApi
+                ? {
+                    ...apiConfig,
+                    imageGenApi: {
+                        ...apiConfig.imageGenApi,
+                        ...snapshot,
+                        // Credentials/endpoints are never copied into message metadata.
+                        apiKey: apiConfig.imageGenApi.apiKey,
+                        baseUrl: apiConfig.imageGenApi.baseUrl,
+                        enabled: apiConfig.imageGenApi.enabled,
+                    },
+                }
+                : apiConfig;
+            const [image] = await generateCharacterPhotos({ prompt, char, messages, apiConfig: retryApiConfig, count: 1, surface: 'chat' });
             if (!image) throw new Error('图片接口没有返回结果');
             let stored = image.startsWith('data:') ? await migrateDataUrlToRef(image) : image;
             if (/^https?:\/\//i.test(image)) {
@@ -1880,25 +1901,40 @@ const Chat: React.FC = () => {
                     if (response.ok) stored = await putImageBlob(await response.blob());
                 } catch { /* 保留远端 URL */ }
             }
-            const sourceMessageId = await DB.saveMessage({
-                charId: char.id,
-                role: 'assistant',
-                type: 'image',
-                content: stored,
-                metadata: {
-                    ...message.metadata,
-                    source: 'regenerated_character_photo',
-                    regeneratedFrom: message.id,
+            const updatedMetadata = {
+                ...message.metadata,
+                source: 'regenerated_character_photo',
+                regeneratedFrom: message.metadata?.regeneratedFrom || message.id,
+                regenerationCount: Number(message.metadata?.regenerationCount || 0) + 1,
+                prompt,
+                generationContext: {
+                    ...(message.metadata?.generationContext || {}),
+                    characterId: char.id,
+                    surface: 'chat',
                     prompt,
                 },
-            });
+                imageGenSnapshot: snapshot || (apiConfig.imageGenApi ? {
+                    model: apiConfig.imageGenApi.model,
+                    size: apiConfig.imageGenApi.size,
+                    aspectRatio: apiConfig.imageGenApi.aspectRatio,
+                    referenceMode: apiConfig.imageGenApi.referenceMode,
+                    similarity: apiConfig.imageGenApi.similarity,
+                    useRecentChatImages: apiConfig.imageGenApi.useRecentChatImages,
+                    chatPromptPrefix: apiConfig.imageGenApi.chatPromptPrefix,
+                    chatNegativePrompt: apiConfig.imageGenApi.chatNegativePrompt,
+                } : undefined),
+            };
+            // Commit only after the replacement is ready, so any generation or
+            // download failure leaves the original image and history untouched.
+            await DB.updateMessageContentAndMetadata(message.id, stored, updatedMetadata);
             try {
+                const existingGalleryImage = await DB.findGalleryImageBySourceMessageId(char.id, message.id);
                 await DB.saveGalleryImage({
-                    id: `img-${Date.now()}-${Math.random()}`,
+                    id: existingGalleryImage?.id || `img-${Date.now()}-${Math.random()}`,
                     charId: char.id,
                     url: stored,
                     timestamp: Date.now(),
-                    sourceMessageId,
+                    sourceMessageId: message.id,
                     savedDate: localDateKey,
                 });
             } catch (galleryError) {
@@ -1906,8 +1942,8 @@ const Chat: React.FC = () => {
             }
             markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
             await reloadMessages(visibleCountRef.current);
-            setSelectedImageMessage(null);
-            addToast('已重新生成一张图片', 'success');
+            setSelectedImageMessage({ ...message, content: stored, metadata: updatedMetadata });
+            addToast('已用新图片替换当前图片', 'success');
         } catch (error: any) {
             addToast(error?.message || '重新生成失败，原图片和聊天记录未受影响', 'error');
         } finally {
@@ -1953,7 +1989,21 @@ const Chat: React.FC = () => {
                     role: 'assistant',
                     type: 'image',
                     content: stored,
-                    metadata: { source: 'character_photo', photoMode: mode, prompt },
+                    metadata: {
+                        source: 'character_photo',
+                        photoMode: mode,
+                        prompt,
+                        imageGenSnapshot: apiConfig.imageGenApi ? {
+                            model: apiConfig.imageGenApi.model,
+                            size: apiConfig.imageGenApi.size,
+                            aspectRatio: apiConfig.imageGenApi.aspectRatio,
+                            referenceMode: apiConfig.imageGenApi.referenceMode,
+                            similarity: apiConfig.imageGenApi.similarity,
+                            useRecentChatImages: apiConfig.imageGenApi.useRecentChatImages,
+                            chatPromptPrefix: apiConfig.imageGenApi.chatPromptPrefix,
+                            chatNegativePrompt: apiConfig.imageGenApi.chatNegativePrompt,
+                        } : undefined,
+                    },
                 });
                 try {
                     await DB.saveGalleryImage({
@@ -2091,6 +2141,16 @@ const Chat: React.FC = () => {
                         sourceUserMessageId: anchor.id,
                         photoMode: plan.mode,
                         prompt,
+                        imageGenSnapshot: apiConfig.imageGenApi ? {
+                            model: apiConfig.imageGenApi.model,
+                            size: apiConfig.imageGenApi.size,
+                            aspectRatio: apiConfig.imageGenApi.aspectRatio,
+                            referenceMode: apiConfig.imageGenApi.referenceMode,
+                            similarity: apiConfig.imageGenApi.similarity,
+                            useRecentChatImages: apiConfig.imageGenApi.useRecentChatImages,
+                            chatPromptPrefix: apiConfig.imageGenApi.chatPromptPrefix,
+                            chatNegativePrompt: apiConfig.imageGenApi.chatNegativePrompt,
+                        } : undefined,
                     },
                 });
                 try {
@@ -3470,6 +3530,31 @@ const Chat: React.FC = () => {
     // --- Forward Chat Records ---
     const [showForwardModal, setShowForwardModal] = useState(false);
     const [forwardGroupId, setForwardGroupId] = useState(GROUP_FILTER_ALL); // 转发弹窗的角色分组筛选
+
+    useEffect(() => registerBackHandler(() => {
+        if (modalType !== 'none') { setModalType('none'); return true; }
+        if (showForwardModal) { setShowForwardModal(false); return true; }
+        if (collaborationPreviewAssetId) { setCollaborationPreviewAssetId(null); return true; }
+        if (collaborationOpen) { setCollaborationOpen(false); return true; }
+        if (memoryRepairOpen) { setMemoryRepairOpen(false); return true; }
+        if (favoritesOpen) { setFavoritesOpen(false); return true; }
+        if (characterPhotoOpen) { setCharacterPhotoOpen(false); return true; }
+        if (chatModelSwitcherOpen) { setChatModelSwitcherOpen(false); return true; }
+        if (showPanel !== 'none') { setShowPanel('none'); return true; }
+        if (selectedImageMessage) { setSelectedImageMessage(null); return true; }
+        if (selectionMode) {
+            setSelectionMode(false);
+            setSelectedMsgIds(new Set());
+            setSelectedThinkingMsgIds(new Set());
+            return true;
+        }
+        if (!showConversationList) { setShowConversationList(true); return true; }
+        return false;
+    }), [
+        registerBackHandler, modalType, showForwardModal, collaborationPreviewAssetId,
+        collaborationOpen, memoryRepairOpen, favoritesOpen, characterPhotoOpen,
+        chatModelSwitcherOpen, showPanel, selectedImageMessage, selectionMode, showConversationList,
+    ]);
 
     const handleForwardSelected = () => {
         if (selectedMsgIds.size === 0) return;

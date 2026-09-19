@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { execSync } from 'node:child_process';
 import { bakeVoiceMiddleware } from './server/bake-voice-middleware';
+import packageJson from './package.json';
 
 // 构建时抓 git 分支 + short commit + UTC+8 构建时间，注入到版本信息显示。
 // 非 git 环境（容器、tarball 部署）退化成 'unknown'，不影响构建。
@@ -76,9 +77,10 @@ export default defineConfig({
     __BUILD_COMMIT__: JSON.stringify(gitInfo.commit),
     __BUILD_TIME__: JSON.stringify(buildTime),
     __BUILD_BADGE_VISIBLE__: JSON.stringify(showBuildBadge),
+    __APP_SEMVER__: JSON.stringify(packageJson.version),
   },
   // GitHub Pages 发布时使用相对路径，避免仓库子路径导致资源 404
-  base: process.env.GITHUB_PAGES ? './' : '/',
+  base: process.env.GITHUB_PAGES || process.env.CAPACITOR_BUILD === '1' ? './' : '/',
   esbuild: {
     // 只剥 debugger，保留 console.* —— 部署后按 F12 仍能看到运行时日志，方便排查。
     drop: ['debugger'],
